@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { signOut } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -24,15 +25,23 @@ const allSections: Section[] = [
   { title: "Employees", href: "/employees", icon: "👥" },
   { title: "Expenses", href: "/expenses", icon: "💸" },
   { title: "Business Info", href: "/business-info", icon: "🏢" },
+  { title: "Users", href: "/users", icon: "👤" },
 ];
 
 export function SectionHeader() {
   const pathname = usePathname();
+  const router = useRouter();
   const [visibleSections, setVisibleSections] = useState<Section[]>(allSections);
   const [hiddenSections, setHiddenSections] = useState<Section[]>([]);
   const containerRef = useRef<HTMLDivElement>(null);
   const sectionsContainerRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
+
+  const handleLogout = async () => {
+    await signOut({ redirect: false });
+    router.push('/login');
+    router.refresh();
+  };
 
   useEffect(() => {
     const calculateVisibleItems = () => {
@@ -172,6 +181,15 @@ export function SectionHeader() {
               </DropdownMenuContent>
             </DropdownMenu>
           )}
+
+          {/* Logout Button */}
+          <Button
+            variant="outline"
+            onClick={handleLogout}
+            className="ml-auto flex-shrink-0"
+          >
+            Logout
+          </Button>
         </div>
       </div>
     </header>

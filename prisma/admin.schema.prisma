@@ -364,3 +364,32 @@ model ExpenseTaxBreakdown {
   @@map("expense_tax_breakdowns")
 }
 
+model User {
+  id              String   @id @default(cuid())
+  name            String
+  email           String   @unique
+  phone           String?
+  role            String
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@map("users")
+}
+
+model Otp {
+  id              String   @id @default(cuid())
+  email           String
+  phone           String?
+  code            String
+  expiresAt       DateTime
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  
+  @@index([email])
+  @@index([phone])
+  @@map("otps")
+}
+

@@ -75,6 +75,15 @@ const sections: Section[] = [
       { title: "All Business Info", href: "/business-info", icon: "🏢" },
     ],
   },
+  {
+    id: "users",
+    title: "Users",
+    icon: "👤",
+    description: "Manage system users and their roles",
+    subsections: [
+      { title: "All Users", href: "/users", icon: "👤" },
+    ],
+  },
 ];
 
 export default function DashboardPage() {
