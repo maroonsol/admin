@@ -364,8 +364,13 @@ export async function generateInvoicePDF(invoiceData: InvoiceData): Promise<Buff
     const chromiumModule = await import('@sparticuz/chromium');
     const Chromium = chromiumModule.default;
     
+    // For Vercel/serverless environments, use @sparticuz/chromium
+    // For local development, try to use system Chrome if available
+    const isVercel = process.env.VERCEL === '1' || process.env.AWS_LAMBDA_FUNCTION_NAME;
+    
     let browser;
-    try {
+    if (isVercel) {
+      // Vercel/serverless: must use @sparticuz/chromium
       const executablePath: string = await Chromium.executablePath();
       browser = await puppeteer.launch({
         args: [
@@ -382,22 +387,46 @@ export async function generateInvoicePDF(invoiceData: InvoiceData): Promise<Buff
         executablePath,
         headless: true,
       });
-    } catch {
-      // Fallback: try with chrome channel
-      browser = await puppeteer.launch({
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote',
-          '--single-process',
-          '--disable-gpu'
-        ],
-        channel: 'chrome',
-        headless: true,
-      });
+    } else {
+      // Local development: try Chromium first, then fallback to system Chrome
+      try {
+        const executablePath: string = await Chromium.executablePath();
+        browser = await puppeteer.launch({
+          args: [
+            ...Chromium.args,
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process',
+            '--disable-gpu'
+          ],
+          executablePath,
+          headless: true,
+        });
+      } catch (error) {
+        // Fallback for local development only
+        try {
+          browser = await puppeteer.launch({
+            args: [
+              '--no-sandbox',
+              '--disable-setuid-sandbox',
+              '--disable-dev-shm-usage',
+              '--disable-accelerated-2d-canvas',
+              '--no-first-run',
+              '--no-zygote',
+              '--single-process',
+              '--disable-gpu'
+            ],
+            channel: 'chrome',
+            headless: true,
+          });
+        } catch (fallbackError) {
+          throw new Error(`Failed to launch browser. Chromium error: ${error instanceof Error ? error.message : String(error)}. Chrome fallback error: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
+        }
+      }
     }
 
     // Create a new page
