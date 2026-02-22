@@ -1,0 +1,366 @@
+// prisma/admin.schema.prisma
+datasource db {
+  provider = "mysql"
+  url      = env("ADMIN_DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "./generated/admin"
+}
+
+model Invoice {
+  id                String            @id @default(cuid())
+  invoiceNumber     String            @unique
+  invoiceType       InvoiceType
+  invoiceDate       DateTime
+  isExport          Boolean           @default(false)
+  currency          String?           @default("INR")
+  exchangeRate      Float?            @default(1.0)
+  lutNumber         String?
+  
+  // Business reference (for B2B invoices)
+  businessId        String?
+  business          BusinessInfo?     @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  
+  // Customer details (for B2C and EXPORT invoices)
+  customerName      String?
+  customerPhone     String?
+  customerEmail     String?
+  customerAddress   String?
+  customerAddress2  String?
+  customerDistrict  String?
+  customerState     String?
+  customerStateCode String?
+  customerPincode   String?
+  customerGst       String?
+  
+  // Invoice totals
+  subtotal          Float
+  totalTax          Float
+  discount          Float?            @default(0)
+  totalPaid         Float?            @default(0)
+  grandTotal        Float
+  balanceAmount     Float
+  roundedAmount     Float?
+  roundedDifference Float?
+  paidOn            DateTime?
+  paid              Boolean           @default(false)
+  partialPayment    Boolean           @default(false)
+  
+  // Partial Payments
+  partialPayments   PartialPayment[]
+  
+  // Items
+  items             InvoiceItem[]
+  
+  // Payment Credits
+  invoiceCredits    InvoiceCredit[]
+  
+  // Timestamps
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  
+  hsnSac      String
+  description String
+  qty         Float
+  rate        Float
+  taxableAmount Float
+  gstRate     Float
+  igstAmount  Float?   @default(0)
+  cgstAmount  Float?   @default(0)
+  sgstAmount  Float?   @default(0)
+  totalAmount Float
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("invoice_items")
+}
+
+enum InvoiceType {
+  B2B
+  B2C
+  EXPORT
+}
+
+model BusinessInfo {
+  id                String   @id @default(cuid())
+  gstNumber         String   @unique
+  
+  // Business details
+  businessName      String
+  businessPhone     String?
+  businessEmail     String?
+  businessAddress   String?
+  businessAddress2  String?
+  businessDistrict  String?
+  businessState     String?
+  businessStateCode String?
+  businessPincode   String?
+  
+  // Invoices
+  invoices          Invoice[]
+  
+  // Payment Credits
+  paymentCredits    PaymentCredit[]
+  
+  // Invoice Credits
+  invoiceCredits    InvoiceCredit[]
+  
+  // Partial Payments
+  partialPayments   PartialPayment[]
+  
+  // Expense Invoices (for GST payment receipts)
+  expenseInvoices   ExpenseInvoice[]
+  
+  // Timestamps
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  @@map("business_info")
+}
+
+model BankAccount {
+  id              String   @id @default(cuid())
+  bankName        String
+  accountNumber   String
+  ifscCode        String
+  branch          String?
+  accountHolderName String
+  
+  // Payment Credits
+  paymentCredits  PaymentCredit[]
+  
+  // Partial Payments
+  partialPayments PartialPayment[]
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@map("bank_accounts")
+}
+
+model PaymentCredit {
+  id              String   @id @default(cuid())
+  creditNumber    Int?
+  creditAmount    Float
+  creditDate      DateTime
+  bankAccountId   String
+  bankAccount     BankAccount @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  
+  // Business reference (for B2B invoices)
+  businessId      String?
+  business        BusinessInfo? @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  
+  // Invoice references
+  invoiceCredits  InvoiceCredit[]
+  
+  // Partial Payments
+  partialPayments PartialPayment[]
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@map("payment_credits")
+}
+
+model InvoiceCredit {
+  id              String   @id @default(cuid())
+  paymentCreditId String
+  paymentCredit   PaymentCredit @relation(fields: [paymentCreditId], references: [id], onDelete: Cascade)
+  invoiceId       String
+  invoice         Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  creditAmount    Float
+  
+  // Business reference (for B2B invoices)
+  businessId      String?
+  business        BusinessInfo? @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@map("invoice_credits")
+}
+
+model PartialPayment {
+  id              String   @id @default(cuid())
+  invoiceId       String
+  invoice         Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  paymentAmount   Float
+  paymentDate     DateTime
+  bankAccountId   String
+  bankAccount     BankAccount @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  
+  // Business reference (for B2B invoices)
+  businessId      String?
+  business        BusinessInfo? @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  
+  // Payment Credit reference (if part of a credit entry)
+  paymentCreditId String?
+  paymentCredit   PaymentCredit? @relation(fields: [paymentCreditId], references: [id], onDelete: SetNull)
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@map("partial_payments")
+}
+
+model Employee {
+  id              String   @id @default(cuid())
+  employeeId      String?  @unique
+  firstName       String
+  lastName        String?
+  email           String?  @unique
+  phone           String?
+  address         String?
+  city            String?
+  state           String?
+  pincode         String?
+  dateOfJoining   DateTime?
+  designation     String?
+  department      String?
+  salary          Float?
+  status          String   @default("active") // active, inactive, terminated
+  
+  // Expenses
+  expensesPaidBy  Expense[] @relation("ExpensesPaidBy")
+  expensesPaidTo  Expense[] @relation("ExpensesPaidTo")
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@map("employees")
+}
+
+model Vendor {
+  id              String   @id @default(cuid())
+  vendorName      String
+  additionalName  String?
+  gstNumber       String?  @unique
+  phone           String?
+  email           String?
+  address         String?
+  state           String?
+  stateCode       String?
+  country         String   @default("India")
+  pincode         String?
+  
+  // Expense Invoices
+  expenseInvoices ExpenseInvoice[]
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@map("vendors")
+}
+
+enum ExpenseType {
+  DIRECT
+  INDIRECT
+}
+
+enum PaymentMethod {
+  CASH
+  UPI
+  NEFT_RTGS
+  IMPS
+  CHEQUE
+}
+
+model Expense {
+  id              String   @id @default(cuid())
+  expenseType     ExpenseType
+  
+  // VCR number
+  vcrNumber       String   @unique
+  
+  // Multiple invoices
+  invoices        ExpenseInvoice[]
+  
+  // Payment details
+  paymentMethod   PaymentMethod
+  chequeNumber    String?
+  
+  // Payment date
+  paidOn          DateTime
+  
+  // Employee references
+  paidById        String?
+  paidBy          Employee? @relation("ExpensesPaidBy", fields: [paidById], references: [id], onDelete: SetNull)
+  paidToId        String?
+  paidTo          Employee? @relation("ExpensesPaidTo", fields: [paidToId], references: [id], onDelete: SetNull)
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@map("expenses")
+}
+
+model ExpenseInvoice {
+  id              String   @id @default(cuid())
+  expenseId       String
+  expense         Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  
+  // Invoice details
+  invoiceNumber   String?
+  invoiceDate     DateTime?
+  expenseCategory String?
+  isGstPaymentReceipt Boolean @default(false)
+  withGst         Boolean  @default(false)
+  
+  // Vendor reference
+  vendorId        String?
+  vendor          Vendor?  @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  
+  // Business reference (for GST payment receipts)
+  businessId      String?
+  business        BusinessInfo? @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  
+  // Invoice amount
+  totalInvoiceAmount Float
+  
+  // Invoice file
+  invoiceFileUrl  String?
+  
+  // Tax breakdown
+  taxBreakdowns   ExpenseTaxBreakdown[]
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@map("expense_invoices")
+}
+
+model ExpenseTaxBreakdown {
+  id              String   @id @default(cuid())
+  expenseInvoiceId String
+  expenseInvoice  ExpenseInvoice @relation(fields: [expenseInvoiceId], references: [id], onDelete: Cascade)
+  
+  taxableAmount   Float
+  taxPercentage   Float
+  taxAmount       Float
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@map("expense_tax_breakdowns")
+}
+
