@@ -362,7 +362,7 @@ export async function generateInvoicePDF(invoiceData: InvoiceData): Promise<Buff
 
     const puppeteer = await import('puppeteer-core');
     const chromiumModule = await import('@sparticuz/chromium-min');
-    const chromium = chromiumModule.default || chromiumModule;
+    const Chromium = chromiumModule.default;
     
     // For Vercel/serverless environments, use @sparticuz/chromium-min
     // For local development, try to use system Chrome if available
@@ -371,26 +371,22 @@ export async function generateInvoicePDF(invoiceData: InvoiceData): Promise<Buff
     let browser;
     if (isVercel) {
       // Vercel/serverless: must use @sparticuz/chromium-min
-      chromium.setGraphicsMode(false);
-      const executablePath: string = await chromium.executablePath();
+      Chromium.setGraphicsMode = false;
+      const executablePath: string = await Chromium.executablePath();
       browser = await puppeteer.launch({
-        args: chromium.args,
-        defaultViewport: chromium.defaultViewport,
+        args: Chromium.args,
         executablePath,
-        headless: chromium.headless,
-        ignoreHTTPSErrors: true,
+        headless: true,
       });
     } else {
       // Local development: try Chromium first, then fallback to system Chrome
       try {
-        chromium.setGraphicsMode(false);
-        const executablePath: string = await chromium.executablePath();
+        Chromium.setGraphicsMode = false;
+        const executablePath: string = await Chromium.executablePath();
         browser = await puppeteer.launch({
-          args: chromium.args,
-          defaultViewport: chromium.defaultViewport,
+          args: Chromium.args,
           executablePath,
-          headless: chromium.headless,
-          ignoreHTTPSErrors: true,
+          headless: true,
         });
       } catch (error) {
         // Fallback for local development only
