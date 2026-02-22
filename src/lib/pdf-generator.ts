@@ -361,50 +361,36 @@ export async function generateInvoicePDF(invoiceData: InvoiceData): Promise<Buff
     `;
 
     const puppeteer = await import('puppeteer-core');
-    const chromiumModule = await import('@sparticuz/chromium');
-    const Chromium = chromiumModule.default;
+    const chromiumModule = await import('@sparticuz/chromium-min');
+    const chromium = chromiumModule.default || chromiumModule;
     
-    // For Vercel/serverless environments, use @sparticuz/chromium
+    // For Vercel/serverless environments, use @sparticuz/chromium-min
     // For local development, try to use system Chrome if available
     const isVercel = process.env.VERCEL === '1' || process.env.AWS_LAMBDA_FUNCTION_NAME;
     
     let browser;
     if (isVercel) {
-      // Vercel/serverless: must use @sparticuz/chromium
-      const executablePath: string = await Chromium.executablePath();
+      // Vercel/serverless: must use @sparticuz/chromium-min
+      chromium.setGraphicsMode(false);
+      const executablePath: string = await chromium.executablePath();
       browser = await puppeteer.launch({
-        args: [
-          ...Chromium.args,
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote',
-          '--single-process',
-          '--disable-gpu'
-        ],
+        args: chromium.args,
+        defaultViewport: chromium.defaultViewport,
         executablePath,
-        headless: true,
+        headless: chromium.headless,
+        ignoreHTTPSErrors: true,
       });
     } else {
       // Local development: try Chromium first, then fallback to system Chrome
       try {
-        const executablePath: string = await Chromium.executablePath();
+        chromium.setGraphicsMode(false);
+        const executablePath: string = await chromium.executablePath();
         browser = await puppeteer.launch({
-          args: [
-            ...Chromium.args,
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process',
-            '--disable-gpu'
-          ],
+          args: chromium.args,
+          defaultViewport: chromium.defaultViewport,
           executablePath,
-          headless: true,
+          headless: chromium.headless,
+          ignoreHTTPSErrors: true,
         });
       } catch (error) {
         // Fallback for local development only
