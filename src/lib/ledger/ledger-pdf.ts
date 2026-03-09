@@ -89,9 +89,9 @@ export async function generateLedgerPDF(ledgerData: LedgerData): Promise<Buffer>
       { text: 'Particulars', align: 'left', font: boldFont, background: true },
       { text: 'Vch Type', align: 'left', font: boldFont, background: true, noWrap: true },
       { text: 'Vch No.', align: 'left', font: boldFont, background: true, noWrap: true },
-      { text: 'Debit (₹)', align: 'right', font: boldFont, background: true, noWrap: true },
-      { text: 'Credit (₹)', align: 'right', font: boldFont, background: true, noWrap: true },
-      { text: 'Balance (₹)', align: 'right', font: boldFont, background: true, noWrap: true },
+      { text: 'Debit (INR)', align: 'right', font: boldFont, background: true, noWrap: true },
+      { text: 'Credit (INR)', align: 'right', font: boldFont, background: true, noWrap: true },
+      { text: 'Balance (INR)', align: 'right', font: boldFont, background: true, noWrap: true },
     ],
   };
 
