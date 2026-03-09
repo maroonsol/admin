@@ -1,5 +1,6 @@
 import path from "path";
 import fs from "fs";
+import { PDFDocument, PageSizes, StandardFonts, rgb, PDFPage, PDFFont, PDFImage } from 'pdf-lib';
 import { indianStates } from './data';
 
 interface InvoiceItem {
@@ -46,34 +47,440 @@ interface InvoiceData {
   items: InvoiceItem[];
 }
 
+export interface TableCell {
+  text: string;
+  align?: "left" | "center" | "right";
+  font?: PDFFont;
+  fontSize?: number;
+  background?: boolean;
+  image?: PDFImage;
+  noWrap?: boolean; // For numeric columns
+}
+
+export interface TableRow {
+  cells: TableCell[];
+}
+
+export interface DrawTableOptions {
+  page: PDFPage;
+  startX: number;
+  startY: number;
+  tableWidth: number;
+  columns: number[]; // actual widths in points
+  rows: TableRow[];
+  font: PDFFont;
+  boldFont: PDFFont;
+  fontSize: number;
+  cellPadding?: number;
+  lineHeight?: number;
+}
+
+// Global settings (exported for use by ledger and other PDF generators)
+export const PAGE_MARGIN = 5;
+export const FONT_SIZE = 8; // Default font size
+export const LINE_HEIGHT = 12;
+export const CELL_PADDING = 6;
+export const CELL_PADDING_VERTICAL = 4; // Vertical padding inside each cell (rows still connect)
+const SECTION_SPACING = 0; // No gap between sections - rows connect like one table
+const LOGO_HEIGHT = 20;
+
+// Helper to convert number to words
+function numberToWords(num: number): string {
+  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+  
+  if (num < 20) return ones[num];
+  if (num < 100) return tens[Math.floor(num / 10)] + (num % 10 ? " " + ones[num % 10] : "");
+  if (num < 1000) return ones[Math.floor(num / 100)] + " Hundred" + (num % 100 ? " and " + numberToWords(num % 100) : "");
+  if (num < 100000) return numberToWords(Math.floor(num / 1000)) + " Thousand" + (num % 1000 ? " " + numberToWords(num % 1000) : "");
+  if (num < 10000000) return numberToWords(Math.floor(num / 100000)) + " Lakh" + (num % 100000 ? " " + numberToWords(num % 100000) : "");
+  return numberToWords(Math.floor(num / 10000000)) + " Crore" + (num % 10000000 ? " " + numberToWords(num % 10000000) : "");
+}
+
+// Helper to format date
+function formatDate(dateInput: string): string {
+  const date = new Date(dateInput);
+  return date.toLocaleDateString('en-IN');
+}
+
+// Helper to wrap text
+function wrapText(text: string, maxWidth: number, font: PDFFont, fontSize: number): string[] {
+  if (!text) return [''];
+  const words = text.split(/\s+/);
+  const lines: string[] = [];
+  let line = '';
+  words.forEach((word) => {
+    const testLine = line ? `${line} ${word}` : word;
+    if (font.widthOfTextAtSize(testLine, fontSize) <= maxWidth) {
+      line = testLine;
+      return;
+    }
+    if (line) lines.push(line);
+    line = word;
+  });
+  if (line) lines.push(line);
+  return lines.length ? lines : [''];
+}
+
+// Measure column widths dynamically
+function measureColumnWidths(
+  headers: string[],
+  rows: TableRow[],
+  font: PDFFont,
+  fontSize: number
+): number[] {
+  const widths = headers.map((h) => font.widthOfTextAtSize(h, fontSize) + (CELL_PADDING * 2));
+  
+  rows.forEach((row) => {
+    row.cells.forEach((cell, i) => {
+      const cellFont = cell.font || font;
+      if (cell.noWrap) {
+        // For no-wrap columns, measure single line (first line if multi-line)
+        const firstLine = cell.text.split('\n')[0] || cell.text;
+        const w = cellFont.widthOfTextAtSize(firstLine, fontSize) + (CELL_PADDING * 2);
+        widths[i] = Math.max(widths[i], w);
+      } else {
+        // For wrap columns, measure longest line (not individual words)
+        const lines = cell.text.split('\n');
+        lines.forEach((line) => {
+          const w = cellFont.widthOfTextAtSize(line, fontSize) + (CELL_PADDING * 2);
+          widths[i] = Math.max(widths[i], w);
+        });
+      }
+    });
+  });
+  
+  return widths;
+}
+
+// Fit columns to page width
+function fitColumnsToPage(
+  widths: number[],
+  tableWidth: number,
+  flexibleIndices: number[]
+): number[] {
+  const total = widths.reduce((a, b) => a + b, 0);
+  
+  if (total <= tableWidth) return widths;
+  
+  const overflow = total - tableWidth;
+  const flexibleTotal = flexibleIndices.reduce((sum, idx) => sum + widths[idx], 0);
+  
+  if (flexibleTotal === 0) return widths; // No flexible columns
+  
+  // Shrink flexible columns proportionally
+  flexibleIndices.forEach((idx) => {
+    const proportion = widths[idx] / flexibleTotal;
+    const shrink = Math.min(widths[idx] * 0.5, overflow * proportion);
+    widths[idx] = Math.max(widths[idx] - shrink, 30); // Minimum 30 points
+  });
+  
+  // If still overflowing, shrink description column more (it's most flexible)
+  const newTotal = widths.reduce((a, b) => a + b, 0);
+  if (newTotal > tableWidth) {
+    const remainingOverflow = newTotal - tableWidth;
+    const descIndex = flexibleIndices[0]; // Description is first flexible
+    widths[descIndex] = Math.max(widths[descIndex] - remainingOverflow, 30); // Minimum 30 points
+  }
+  
+  return widths;
+}
+
+// Measure row height based on cell content
+function measureRowHeight(
+  row: TableRow,
+  columnWidths: number[],
+  font: PDFFont,
+  boldFont: PDFFont,
+  fontSize: number,
+  cellPadding: number,
+  lineHeight: number
+): number {
+  let maxLines = 1;
+  let hasImage = false;
+  let maxFontSize = fontSize;
+  
+  row.cells.forEach((cell, cellIdx) => {
+    if (cell.image) {
+      hasImage = true;
+      const imageHeight = LOGO_HEIGHT;
+      const imageLines = Math.ceil(imageHeight / lineHeight);
+      maxLines = Math.max(maxLines, imageLines);
+    } else if (cell.text) {
+      const cellWidth = columnWidths[cellIdx] - (cellPadding * 2);
+      const cellFont = cell.font || font;
+      const cellFontSize = cell.fontSize || fontSize;
+      maxFontSize = Math.max(maxFontSize, cellFontSize);
+      
+      // Check for special formatting (company name, bill to, totals, recipient)
+      const isCompanyName = cell.text.includes('Maroonsol Private Limited');
+      const isBillToLabel = cell.text.startsWith('Bill To:');
+      const isTotalsLabel = cell.text.includes('Total Invoice Amount:') || 
+                           cell.text.includes('Total Paid:') || 
+                           cell.text.includes('Balance Amount:') || 
+                           cell.text.includes('Amount in Words:');
+      
+      if (cell.noWrap) {
+        // No wrap - single line
+        maxLines = Math.max(maxLines, 1);
+      } else {
+        // Wrap text
+        const textLines = cell.text.split('\n');
+        let cellHeight = 0;
+        
+        textLines.forEach((textLine, lineIdx) => {
+          // Determine actual font size for this line
+          let lineFontSize = cellFontSize;
+          if (isCompanyName && lineIdx === 0) {
+            lineFontSize = 10;
+          } else if (isBillToLabel && lineIdx === 0) {
+            lineFontSize = 10;
+          } else if (isTotalsLabel && ['Total Invoice Amount:', 'Total Paid:', 'Balance Amount:', 'Amount in Words:'].some(label => textLine.startsWith(label))) {
+            lineFontSize = 8;
+          } else if (textLine.includes('(Original for Recipient)') && cellFontSize === 14) {
+            lineFontSize = 8;
+          }
+          
+          maxFontSize = Math.max(maxFontSize, lineFontSize);
+          const wrappedLines = wrapText(textLine, cellWidth, cellFont, lineFontSize);
+          cellHeight += wrappedLines.length;
+        });
+        
+        maxLines = Math.max(maxLines, cellHeight);
+      }
+    }
+  });
+  
+  if (hasImage) {
+    const minHeight = LOGO_HEIGHT + (CELL_PADDING_VERTICAL * 2);
+    const textHeight = maxLines * Math.max(lineHeight, maxFontSize + 2) + (CELL_PADDING_VERTICAL * 2);
+    return Math.max(minHeight, textHeight);
+  }
+  
+  return maxLines * Math.max(lineHeight, maxFontSize + 2) + (CELL_PADDING_VERTICAL * 2);
+}
+
+// Draw a single cell
+function drawCell(
+  page: PDFPage,
+  cell: TableCell,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  font: PDFFont,
+  boldFont: PDFFont,
+  fontSize: number,
+  cellPadding: number,
+  lineHeight: number
+): void {
+  // Draw cell background if needed
+  if (cell.background) {
+    page.drawRectangle({
+      x,
+      y: y - height,
+      width,
+      height,
+      color: rgb(0.94, 0.94, 0.94)
+    });
+  }
+  
+  // Draw cell border
+  page.drawRectangle({
+    x,
+    y: y - height,
+    width,
+    height,
+    borderWidth: 1,
+    borderColor: rgb(0, 0, 0)
+  });
+  
+  // Draw image if present
+  if (cell.image) {
+    const imageHeight = LOGO_HEIGHT;
+    const imageWidth = (cell.image.width / cell.image.height) * imageHeight;
+    const imageX = x + cellPadding;
+    const imageY = y - CELL_PADDING_VERTICAL - imageHeight;
+    page.drawImage(cell.image, {
+      x: imageX,
+      y: imageY,
+      width: imageWidth,
+      height: imageHeight
+    });
+    return;
+  }
+  
+  // Draw text
+  if (cell.text) {
+    const cellFont = cell.font || font;
+    const cellFontSize = cell.fontSize || fontSize;
+    const cellWidth = width - (cellPadding * 2);
+    const align = cell.align || "left";
+    
+    // Check for special formatting needs
+    const isCompanyName = cell.text.includes('Maroonsol Private Limited');
+    const isBillToLabel = cell.text.startsWith('Bill To:');
+    const isTotalsLabel = cell.text.includes('Total Invoice Amount:') || 
+                         cell.text.includes('Total Paid:') || 
+                         cell.text.includes('Balance Amount:') || 
+                         cell.text.includes('Amount in Words:');
+    
+    if (cell.noWrap) {
+      // No wrap - draw single line
+      const text = cell.text.split('\n')[0] || cell.text;
+      const textWidth = cellFont.widthOfTextAtSize(text, cellFontSize);
+      let textX = x + cellPadding;
+      
+      if (align === "center") {
+        textX = x + (width - textWidth) / 2;
+      } else if (align === "right") {
+        textX = x + width - textWidth - cellPadding;
+      }
+      
+      const textY = y - CELL_PADDING_VERTICAL - cellFontSize;
+      
+      page.drawText(text, {
+        x: textX,
+        y: textY,
+        size: cellFontSize,
+        font: cellFont,
+        color: rgb(0, 0, 0)
+      });
+    } else {
+      // Wrap text
+      const textLines = cell.text.split('\n');
+      let lineY = y - CELL_PADDING_VERTICAL;
+      
+      textLines.forEach((textLine, lineIdx) => {
+        // Determine font and size for this line
+        let lineFont = cellFont;
+        let lineFontSize = cellFontSize;
+        
+        // Special formatting rules
+        if (isCompanyName && lineIdx === 0) {
+          // First line is company name - bold and size 10
+          lineFont = boldFont;
+          lineFontSize = 10;
+        } else if (isBillToLabel && lineIdx === 0) {
+          // First line is "Bill To:" - bold and size 10
+          lineFont = boldFont;
+          lineFontSize = 10;
+        } else if (isTotalsLabel) {
+          // Check if this line is a totals label
+          const totalsLabels = ['Total Invoice Amount:', 'Total Paid:', 'Balance Amount:', 'Amount in Words:'];
+          if (totalsLabels.some(label => textLine.startsWith(label))) {
+            lineFont = boldFont;
+            lineFontSize = 10;
+          }
+        } else if (textLine.includes('(Original for Recipient)') && cellFontSize === 14) {
+          // Recipient text below TAX INVOICE - size 8, regular font
+          lineFont = font;
+          lineFontSize = 8;
+        }
+        
+        const wrappedLines = wrapText(textLine, cellWidth, lineFont, lineFontSize);
+        
+        wrappedLines.forEach((wrappedLine) => {
+          const textWidth = lineFont.widthOfTextAtSize(wrappedLine, lineFontSize);
+          let textX = x + cellPadding;
+          
+          if (align === "center") {
+            textX = x + (width - textWidth) / 2;
+          } else if (align === "right") {
+            textX = x + width - textWidth - cellPadding;
+          }
+          
+          const textY = lineY - lineFontSize;
+          
+          page.drawText(wrappedLine, {
+            x: textX,
+            y: textY,
+            size: lineFontSize,
+            font: lineFont,
+            color: rgb(0, 0, 0)
+          });
+          
+          lineY -= Math.max(lineHeight, lineFontSize + 2);
+        });
+      });
+    }
+  }
+}
+
+// Main table drawing function (exported for use by ledger and other PDF generators)
+export function drawTable(options: DrawTableOptions): number {
+  const {
+    page,
+    startX,
+    startY,
+    tableWidth,
+    columns,
+    rows,
+    font,
+    boldFont,
+    fontSize,
+    cellPadding = CELL_PADDING,
+    lineHeight = LINE_HEIGHT
+  } = options;
+  
+  let currentY = startY;
+  
+  rows.forEach((row) => {
+    // Measure row height
+    const rowHeight = measureRowHeight(row, columns, font, boldFont, fontSize, cellPadding, lineHeight);
+    
+    // Draw row cells
+    let currentX = startX;
+    row.cells.forEach((cell, cellIdx) => {
+      drawCell(
+        page,
+        cell,
+        currentX,
+        currentY,
+        columns[cellIdx],
+        rowHeight,
+        font,
+        boldFont,
+        fontSize,
+        cellPadding,
+        lineHeight
+      );
+      currentX += columns[cellIdx];
+    });
+    
+    // Move to next row
+    currentY -= rowHeight;
+  });
+  
+  return currentY;
+}
+
 export async function generateInvoicePDF(invoiceData: InvoiceData): Promise<Buffer> {
   try {
-    // Precompute base64 images
-    const logoBase64 = await getLogoBase64();
-    await getSignatureBase64();
-
-    // Helper to convert number to words
-    function numberToWords(num: number): string {
-      const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
-      const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
-      
-      if (num < 20) return ones[num];
-      if (num < 100) return tens[Math.floor(num / 10)] + (num % 10 ? " " + ones[num % 10] : "");
-      if (num < 1000) return ones[Math.floor(num / 100)] + " Hundred" + (num % 100 ? " and " + numberToWords(num % 100) : "");
-      if (num < 100000) return numberToWords(Math.floor(num / 1000)) + " Thousand" + (num % 1000 ? " " + numberToWords(num % 1000) : "");
-      if (num < 10000000) return numberToWords(Math.floor(num / 100000)) + " Lakh" + (num % 100000 ? " " + numberToWords(num % 100000) : "");
-      return numberToWords(Math.floor(num / 10000000)) + " Crore" + (num % 10000000 ? " " + numberToWords(num % 10000000) : "");
+    // Create PDF document
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage(PageSizes.A4);
+    const { width, height } = page.getSize();
+    
+    // Load fonts
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    
+    // Load logo image
+    let logoImage: PDFImage | null = null;
+    try {
+      const logoPath = path.join(process.cwd(), "public", "logo", "logo.png");
+      if (fs.existsSync(logoPath)) {
+        const logoBytes = fs.readFileSync(logoPath);
+        logoImage = await pdfDoc.embedPng(logoBytes);
+      }
+    } catch (error) {
+      console.error('Error loading logo:', error);
     }
-
-    // Helper to format date
-    function formatDate(dateInput: string): string {
-      const date = new Date(dateInput);
-      return date.toLocaleDateString('en-IN');
-    }
-
+    
     // Determine if customer is in same state as company
     const isSameState = invoiceData.customerState === 'Bihar';
-
+    
     // Get state code for place of supply
     interface StateInfo {
       name: string;
@@ -84,390 +491,346 @@ export async function generateInvoicePDF(invoiceData: InvoiceData): Promise<Buff
     // Calculate rounding
     const roundedTotal = Math.round(invoiceData.grandTotal);
     const roundingDiff = roundedTotal - invoiceData.grandTotal;
-
-    // Create HTML content
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <style>
-            @page {
-              margin: 0;
-              size: A4;
-            }
-            body {
-              font-family: Arial, sans-serif;
-              margin: 0;
-              padding: 0;
-              font-size: 12px;
-              color: #000;
-              line-height: 1.4;
-            }
-            .invoice-container {
-              padding: 25px;
-            }
-            .header {
-              display: flex;
-              justify-content: space-between;
-              align-items: flex-start;
-              margin-bottom: 10px;
-              border-bottom: 1px solid #000;
-              padding-bottom: 8px;
-            }
-            .logo {
-              width: 160px;
-              height: auto;
-            }
-            .invoice-title-section {
-              text-align: right;
-            }
-            .invoice-title {
-              font-size: 22px;
-              font-weight: bold;
-              color: #000;
-              margin: 0;
-            }
-            .original-recipient {
-              font-size: 11px;
-              color: #333;
-              margin: 2px 0 0 0;
-            }
-            .company-details {
-              font-size: 11px;
-              line-height: 1.5;
-              margin-top: 10px;
-            }
-            .company-details p {
-              margin: 1px 0;
-            }
-            .main-content {
-              display: flex;
-              justify-content: space-between;
-              margin-bottom: 10px;
-              margin-top: 8px;
-            }
-            .billing-details, .invoice-details {
-              width: 48%;
-              font-size: 11px;
-              line-height: 0.6;
-            }
-            .billing-details h3, .invoice-details h3 {
-              color: #000;
-              margin: 0 0 4px 0;
-              font-size: 13px;
-              font-weight: bold;
-            }
-            .billing-details p{
-              line-height: 1.2;
-            }
-            table {
-              width: 100%;
-              border-collapse: collapse;
-              margin-bottom: 12px;
-              font-size: 11px;
-            }
-            th {
-              background-color: #f0f0f0;
-              color: #000;
-              padding: 5px 4px;
-              text-align: center;
-              border: 1px solid #000;
-              font-weight: bold;
-              font-size: 11px;
-            }
-            td {
-              padding: 4px;
-              border: 1px solid #000;
-              text-align: center;
-              font-size: 11px;
-            }
-            .description-cell {
-              text-align: left;
-              padding-left: 6px;
-            }
-            .bottom-row {
-              display: flex;
-              justify-content: space-between;
-              align-items: flex-start;
-              gap: 20px;
-              margin-top: 10px;
-            }
-            .totals {
-              width: 200px;
-              font-size: 11px;
-            }
-            .totals p {
-              margin: 1px 0;
-              display: flex;
-              justify-content: space-between;
-            }
-            .total-row {
-              background-color: #f0f0f0;
-              font-weight: bold;
-              padding: 3px;
-              margin-top: 3px;
-              border: 1px solid #000;
-            }
-            .amount-words {
-              font-size: 11px;
-              margin-top: 6px;
-              color: #000;
-            }
-            .bank-details {
-              font-size: 11px;
-              min-width: 180px;
-            }
-            .bank-details h3 {
-              margin: 0 0 4px 0;
-              font-size: 13px;
-              font-weight: bold;
-            }
-            .bank-details p {
-              margin: 1px 0;
-            }
-            .footer {
-              margin-top: 12px;
-              font-size: 12px;
-              color: #333;
-              line-height: 1.4;
-            }
-            .footer p {
-              margin: 1px 0;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="invoice-container">
-            <div class="header">
-              <img src="data:image/png;base64,${logoBase64}" class="logo" alt="Logo">
-              <div class="invoice-title-section">
-                <div class="invoice-title">${invoiceData.isExport ? 'EXPORT INVOICE' : 'TAX INVOICE'}</div>
-                <div class="original-recipient">(Original for Recipient)</div>
-              </div>
-            </div>
-            
-            <div class="company-details">
-              <p><strong>Maroonsol Private Limited</strong></p>
-              <p>Khairatali, Mittan Chak, Patna, Bihar, India, 804453</p>
-              <p>info@maroonsol.com | (+91) 9305166411</p>
-              <p>GSTIN: 10AATCM8978R1Z8 | PAN: AATCM8978R | CIN: U69100BR2025PTC079059</p>
-              <p>Place of Supply: ${invoiceData.customerState || 'West Bengal'} (${stateCode})</p>
-            </div>
-
-            <div class="main-content">
-              <div class="billing-details">
-                <h3>Bill To:</h3>
-                <p><strong>${invoiceData.customerName}</strong></p>
-                ${invoiceData.customerAddress ? `<p>${invoiceData.customerAddress}</p>` : ''}
-                ${invoiceData.customerAddress2 ? `<p>${invoiceData.customerAddress2}</p>` : ''}
-                ${invoiceData.customerDistrict ? `<p>${invoiceData.customerDistrict}</p>` : ''}
-                ${invoiceData.customerState && invoiceData.customerPincode ? `<p>${invoiceData.customerState} - ${invoiceData.customerPincode}</p>` : ''}
-                ${invoiceData.customerGst ? `<p><strong>GST:</strong> ${invoiceData.customerGst}</p>` : ''}
-                ${invoiceData.customerPhone ? `<p><strong>Phone:</strong> ${invoiceData.customerPhone}</p>` : ''}
-                ${invoiceData.customerEmail ? `<p><strong>Email:</strong> ${invoiceData.customerEmail}</p>` : ''}
-              </div>
-
-              <div class="invoice-details">
-                <h3>Invoice Details:</h3>
-                <p><strong>Invoice No:</strong> ${invoiceData.invoiceNumber}</p>
-                <p><strong>Invoice Date:</strong> ${formatDate(invoiceData.invoiceDate)}</p>
-                <p><strong>Invoice Amount:</strong> ${invoiceData.currency} ${roundedTotal.toFixed(2)}</p>
-                ${invoiceData.isExport ? `<p><strong>Exchange Rate:</strong> ${invoiceData.exchangeRate}</p>` : ''}
-              </div>
-            </div>
-
-            <table>
-              <thead>
-                <tr>
-                  <th style="width: 5%;">S.No</th>
-                  <th style="width: 35%;">Description</th>
-                  <th style="width: 10%;">HSN/SAC</th>
-                  <th style="width: 8%;">Rate</th>
-                  <th style="width: 6%;">Qty</th>
-                  <th style="width: 10%;">Taxable Amount</th>
-                  ${isSameState ? `
-                    <th style="width: 9%;">CGST (Rate & Amount)</th>
-                    <th style="width: 9%;">SGST (Rate & Amount)</th>
-                  ` : `
-                    <th style="width: 9%;">IGST (Rate & Amount)</th>
-                  `}
-                  <th style="width: 10%;">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${invoiceData.items.map((item, idx) => {
-                  return `
-                    <tr>
-                      <td>${idx + 1}</td>
-                      <td class="description-cell">${item.description}</td>
-                      <td>${item.hsnSac}</td>
-                      <td>${invoiceData.currency} ${item.rate.toFixed(2)}</td>
-                      <td>${item.qty}</td>
-                      <td>${invoiceData.currency} ${item.taxableAmount.toFixed(2)}</td>
-                      ${isSameState ? `
-                        <td>${(item.gstRate/2).toFixed(1)}%<br/>${invoiceData.currency} ${item.cgstAmount.toFixed(2)}</td>
-                        <td>${(item.gstRate/2).toFixed(1)}%<br/>${invoiceData.currency} ${item.sgstAmount.toFixed(2)}</td>
-                      ` : `
-                        <td>${item.gstRate}%<br/>${invoiceData.currency} ${item.igstAmount.toFixed(2)}</td>
-                      `}
-                      <td>${invoiceData.currency} ${item.totalAmount.toFixed(2)}</td>
-                    </tr>
-                  `;
-                }).join('')}
-              </tbody>
-            </table>
-
-            <div class="bottom-row">
-              <div class="bank-details">
-                <h3>Bank Details:</h3>
-                <p><strong>Bank Name:</strong> AXIS BANK</p>
-                <p><strong>Account Number:</strong> 925020031020697</p>
-                <p><strong>IFSC Code:</strong> UTIB0005552</p>
-                <p><strong>Branch:</strong> KURTHAUR PARSA BRANCH</p>
-                <p><strong>Account Holder:</strong> MAROONSOL PRIVATE LIMITED</p>
-                ${invoiceData.isExport ? `<p><strong>SWIFT CODE:</strong> AXISINBB142</p>` : ''}
-                
-                <div class="footer">
-                  <p>1. Please make all cheques/DD payable to MAROONSOL PRIVATE LIMITED</p>
-                  <p>2. This is a computer generated Invoice and does not require any stamp or signature</p>
-                </div>
-              </div>
-              <div class="totals">
-                <p><span>Subtotal:</span> <span>${invoiceData.currency} ${invoiceData.subtotal.toFixed(2)}</span></p>
-                <p><span>Total Tax:</span> <span>${invoiceData.currency} ${invoiceData.totalTax.toFixed(2)}</span></p>
-                ${invoiceData.discount > 0 ? `<p><span>Discount:</span> <span>-${invoiceData.currency} ${invoiceData.discount.toFixed(2)}</span></p>` : ''}
-                <div class="total-row">
-                  <span>Grand Total:</span>
-                  <span>${invoiceData.currency} ${invoiceData.grandTotal.toFixed(2)}</span>
-                </div>
-                ${roundingDiff !== 0 ? `<p><span>Rounding Off:</span> <span>${roundingDiff > 0 ? '+' : ''}${invoiceData.currency} ${roundingDiff.toFixed(2)}</span></p>` : ''}
-                <div class="total-row">
-                  <span>Total (Rounded):</span>
-                  <span>${invoiceData.currency} ${roundedTotal.toFixed(2)}</span>
-                </div>
-                <p><span>Total Paid:</span> <span>${invoiceData.currency} ${invoiceData.totalPaid.toFixed(2)}</span></p>
-                <p><span>Balance Amount:</span> <span>${invoiceData.currency} ${(roundedTotal - invoiceData.totalPaid).toFixed(2)}</span></p>
-                <div class="amount-words">
-                  <strong>Amount in Words:</strong> ${invoiceData.isExport 
-                    ? `${invoiceData.currency} ${numberToWords(roundedTotal)}`
-                    : `INR ${numberToWords(roundedTotal)}`} Only
-                </div>
-              </div>
-            </div>
-
-          </div>
-        </body>
-      </html>
-    `;
-
-    const puppeteer = await import('puppeteer-core');
-    const chromiumModule = await import('@sparticuz/chromium-min');
-    const Chromium = chromiumModule.default;
     
-    // For Vercel/serverless environments, use @sparticuz/chromium-min
-    // For local development, try to use system Chrome if available
-    const isVercel = process.env.VERCEL === '1' || process.env.AWS_LAMBDA_FUNCTION_NAME;
+    const tableWidth = width - (PAGE_MARGIN * 2);
+    let currentY = height - PAGE_MARGIN;
     
-    let browser;
-    if (isVercel) {
-      // Vercel/serverless: must use @sparticuz/chromium-min
-      Chromium.setGraphicsMode = false;
-      const executablePath: string = await Chromium.executablePath();
-      browser = await puppeteer.launch({
-        args: Chromium.args,
-        executablePath,
-        headless: true,
-      });
-    } else {
-      // Local development: try Chromium first, then fallback to system Chrome
-      try {
-        Chromium.setGraphicsMode = false;
-        const executablePath: string = await Chromium.executablePath();
-        browser = await puppeteer.launch({
-          args: Chromium.args,
-          executablePath,
-          headless: true,
-        });
-      } catch (error) {
-        // Fallback for local development only
-        try {
-          browser = await puppeteer.launch({
-            args: [
-              '--no-sandbox',
-              '--disable-setuid-sandbox',
-              '--disable-dev-shm-usage',
-              '--disable-accelerated-2d-canvas',
-              '--no-first-run',
-              '--no-zygote',
-              '--single-process',
-              '--disable-gpu'
-            ],
-            channel: 'chrome',
-            headless: true,
-          });
-        } catch (fallbackError) {
-          throw new Error(`Failed to launch browser. Chromium error: ${error instanceof Error ? error.message : String(error)}. Chrome fallback error: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
-        }
+    // ============================================
+    // SECTION 1: HEADER TABLE
+    // Row 1: Logo | TAX INVOICE
+    // Row 2: Company Details | Invoice Meta
+    // ============================================
+    const invoiceTitle = invoiceData.isExport ? 'EXPORT INVOICE' : 'TAX INVOICE';
+    const recipientText = '(Original for Recipient)';
+    const companyName = 'Maroonsol Private Limited';
+    const companyAddress = 'Khairatali, Mittan Chak, Patna, Bihar, India, 804453';
+    const companyContact = 'info@maroonsol.com | (+91) 9305166411';
+    const companyGst = 'GSTIN: 10AATCM8978R1Z8 | PAN: AATCM8978R | CIN: U69100BR2025PTC079059';
+    const placeOfSupply = `Place of Supply: ${invoiceData.customerState || 'West Bengal'} (${stateCode})`;
+    
+    // Header table rows
+    const headerRows: TableRow[] = [
+      {
+        cells: [
+          {
+            text: '',
+            image: logoImage || undefined,
+            align: 'left'
+          },
+          {
+            text: `${invoiceTitle}\n${recipientText}`,
+            align: 'right',
+            font: boldFont,
+            fontSize: 14 // TAX INVOICE font size (recipient will be handled in drawCell)
+          }
+        ]
+      },
+      {
+        cells: [
+          {
+            text: `${companyName}\n${companyAddress}\n${companyContact}\n${companyGst}\n${placeOfSupply}`,
+            align: 'left',
+            font: font // Will handle company name separately
+          },
+          {
+            text: `Invoice No: ${invoiceData.invoiceNumber}\nInvoice Date: ${formatDate(invoiceData.invoiceDate)}\n${placeOfSupply}\nInvoice Amount: ${invoiceData.currency} ${roundedTotal.toFixed(2)}`,
+            align: 'right'
+          }
+        ]
+      }
+    ];
+    
+    // Set company name to bold and size 10 (we'll handle this in drawCell)
+    headerRows[1].cells[0].text = `${companyName}\n${companyAddress}\n${companyContact}\n${companyGst}\n${placeOfSupply}`;
+    
+    // Calculate header column widths (50-50 split for logo and Tax Invoice)
+    const headerColWidths = [
+      tableWidth * 0.5, // Logo column
+      tableWidth * 0.5  // Tax Invoice column
+    ];
+    
+    // Draw first row (Logo | TAX INVOICE)
+    currentY = drawTable({
+      page,
+      startX: PAGE_MARGIN,
+      startY: currentY,
+      tableWidth,
+      columns: headerColWidths,
+      rows: [headerRows[0]],
+      font,
+      boldFont,
+      fontSize: FONT_SIZE
+    });
+    
+    currentY -= SECTION_SPACING;
+    
+    // Draw second row (Company Details | Invoice Meta)
+    const companyColWidths = [
+      tableWidth * 0.5,
+      tableWidth * 0.5
+    ];
+    
+    currentY = drawTable({
+      page,
+      startX: PAGE_MARGIN,
+      startY: currentY,
+      tableWidth,
+      columns: companyColWidths,
+      rows: [headerRows[1]],
+      font,
+      boldFont,
+      fontSize: FONT_SIZE
+    });
+    
+    currentY -= SECTION_SPACING;
+    
+    // ============================================
+    // SECTION 2: BILLING TABLE (1 column - Bill To only)
+    // ============================================
+    // Build address as continuous text (will wrap automatically)
+    const addressParts: string[] = [];
+    if (invoiceData.customerAddress) addressParts.push(invoiceData.customerAddress);
+    if (invoiceData.customerAddress2) addressParts.push(invoiceData.customerAddress2);
+    if (invoiceData.customerDistrict) addressParts.push(invoiceData.customerDistrict);
+    if (invoiceData.customerState && invoiceData.customerPincode) {
+      addressParts.push(`${invoiceData.customerState} - ${invoiceData.customerPincode}`);
+    }
+    const fullAddress = addressParts.join(', ');
+    
+    // Build phone and email line
+    const phoneEmailParts: string[] = [];
+    if (invoiceData.customerPhone) phoneEmailParts.push(`Phone: ${invoiceData.customerPhone}`);
+    if (invoiceData.customerEmail) phoneEmailParts.push(`Email: ${invoiceData.customerEmail}`);
+    const phoneEmailLine = phoneEmailParts.join(' | ');
+    
+    // Build Bill To text with proper formatting
+    const billToTextParts: string[] = [];
+    billToTextParts.push('Bill To:');
+    billToTextParts.push(invoiceData.customerName);
+    if (fullAddress) billToTextParts.push(fullAddress);
+    if (invoiceData.customerGst) billToTextParts.push(`GST: ${invoiceData.customerGst}`);
+    if (phoneEmailLine) billToTextParts.push(phoneEmailLine);
+    
+    const billingRows: TableRow[] = [
+      {
+        cells: [
+          {
+            text: billToTextParts.join('\n'),
+            align: 'left',
+            font: font
+          }
+        ]
+      }
+    ];
+    
+    currentY = drawTable({
+      page,
+      startX: PAGE_MARGIN,
+      startY: currentY,
+      tableWidth,
+      columns: [tableWidth],
+      rows: billingRows,
+      font,
+      boldFont,
+      fontSize: FONT_SIZE
+    });
+    
+    currentY -= SECTION_SPACING;
+    
+    // ============================================
+    // SECTION 3: ITEMS TABLE (Dynamic columns)
+    // ============================================
+    const itemsHeaders = isSameState
+      ? ['S.No', 'Description', 'HSN/SAC', 'Rate', 'Qty', 'Taxable Amount', 'CGST (Rate & Amount)', 'SGST (Rate & Amount)', 'Total']
+      : ['S.No', 'Description', 'HSN/SAC', 'Rate', 'Qty', 'Taxable Amount', 'IGST (Rate & Amount)', 'Total'];
+    
+    // Prepare item rows data
+    const itemsData: string[][] = invoiceData.items.map((item, idx) => {
+      if (isSameState) {
+        return [
+          String(idx + 1),
+          item.description,
+          item.hsnSac,
+          `${invoiceData.currency} ${item.rate.toFixed(2)}`,
+          String(item.qty),
+          `${invoiceData.currency} ${item.taxableAmount.toFixed(2)}`,
+          `${(item.gstRate/2).toFixed(1)}%\n${invoiceData.currency} ${item.cgstAmount.toFixed(2)}`,
+          `${(item.gstRate/2).toFixed(1)}%\n${invoiceData.currency} ${item.sgstAmount.toFixed(2)}`,
+          `${invoiceData.currency} ${item.totalAmount.toFixed(2)}`
+        ];
+      } else {
+        return [
+          String(idx + 1),
+          item.description,
+          item.hsnSac,
+          `${invoiceData.currency} ${item.rate.toFixed(2)}`,
+          String(item.qty),
+          `${invoiceData.currency} ${item.taxableAmount.toFixed(2)}`,
+          `${item.gstRate}%\n${invoiceData.currency} ${item.igstAmount.toFixed(2)}`,
+          `${invoiceData.currency} ${item.totalAmount.toFixed(2)}`
+        ];
+      }
+    });
+    
+    // Convert to TableRow format
+    const itemsRows: TableRow[] = [
+      {
+        cells: itemsHeaders.map((h) => ({
+          text: h,
+          align: 'center' as "left" | "center" | "right",
+          font: boldFont,
+          fontSize: 8, // Header font size
+          background: true,
+          noWrap: false
+        }))
+      },
+      ...itemsData.map((rowData) => ({
+        cells: rowData.map((cellText, cellIdx) => {
+          // Description column (index 1) can wrap; tax columns (CGST/SGST/IGST) have % + amount on two lines
+          const isDescription = cellIdx === 1;
+          const isTaxColumn = isSameState ? (cellIdx === 6 || cellIdx === 7) : (cellIdx === 6);
+          const isNumeric = [0, 3, 4, 5, isSameState ? (cellIdx === 6 || cellIdx === 7 || cellIdx === 8) : (cellIdx === 6 || cellIdx === 7)].includes(cellIdx);
+          
+          let align: "left" | "center" | "right" = 'center';
+          if (isDescription) {
+            align = 'left';
+          } else if (isNumeric) {
+            align = 'right';
+          }
+          
+          // Tax columns: show both lines (percentage + amount), so noWrap must be false
+          return {
+            text: cellText,
+            align: align,
+            noWrap: !isDescription && !isTaxColumn
+          };
+        })
+      }))
+    ];
+    
+    // Measure column widths
+    let columnWidths = measureColumnWidths(itemsHeaders, itemsRows, font, FONT_SIZE);
+    
+    // Define flexible and fixed columns
+    const flexibleIndices = isSameState 
+      ? [1, 6, 7] // Description, CGST, SGST
+      : [1, 6]; // Description, IGST
+    
+    // Fit columns to page
+    columnWidths = fitColumnsToPage(columnWidths, tableWidth, flexibleIndices);
+    
+    // Check if still overflowing and reduce font size if needed
+    let tableFontSize = FONT_SIZE;
+    const totalWidth = columnWidths.reduce((a, b) => a + b, 0);
+    if (totalWidth > tableWidth) {
+      tableFontSize = 9;
+      // Re-measure with smaller font
+      columnWidths = measureColumnWidths(itemsHeaders, itemsRows, font, tableFontSize);
+      columnWidths = fitColumnsToPage(columnWidths, tableWidth, flexibleIndices);
+      const newTotalWidth = columnWidths.reduce((a, b) => a + b, 0);
+      if (newTotalWidth > tableWidth * 1.1) {
+        tableFontSize = 8;
+        columnWidths = measureColumnWidths(itemsHeaders, itemsRows, font, tableFontSize);
+        columnWidths = fitColumnsToPage(columnWidths, tableWidth, flexibleIndices);
       }
     }
-
-    // Create a new page
-    const page = await browser.newPage();
-
-    // Set the content of the page
-    await page.setContent(htmlContent, {
-      waitUntil: 'networkidle0'
+    
+    // Update rows with correct font size
+    itemsRows.forEach((row) => {
+      row.cells.forEach((cell) => {
+        if (!cell.fontSize) {
+          cell.fontSize = tableFontSize;
+        }
+      });
     });
-
-    // Generate PDF
-    const pdf = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: {
-        top: '20px',
-        right: '20px',
-        bottom: '30px',
-        left: '20px'
+    
+    currentY = drawTable({
+      page,
+      startX: PAGE_MARGIN,
+      startY: currentY,
+      tableWidth,
+      columns: columnWidths,
+      rows: itemsRows,
+      font,
+      boldFont,
+      fontSize: tableFontSize
+    });
+    
+    currentY -= SECTION_SPACING;
+    
+    // ============================================
+    // SECTION 4: BANK + TOTALS TABLE (2 columns)
+    // ============================================
+    const bankDetailsLines: string[] = ['Bank Details:'];
+    bankDetailsLines.push('Bank Name: AXIS BANK');
+    bankDetailsLines.push('Account Number: 925020031020697');
+    bankDetailsLines.push('IFSC Code: UTIB0005552');
+    bankDetailsLines.push('Branch: KURTHAUR PARSA BRANCH');
+    bankDetailsLines.push('Account Holder: MAROONSOL PRIVATE LIMITED');
+    if (invoiceData.isExport) {
+      bankDetailsLines.push('SWIFT CODE: AXISINBB142');
+    }
+    bankDetailsLines.push('');
+    bankDetailsLines.push('1. Please make all cheques/DD payable to MAROONSOL PRIVATE LIMITED');
+    bankDetailsLines.push('2. This is a computer generated Invoice and does not require any stamp or signature');
+    
+    const totalsLines: string[] = [];
+    totalsLines.push(`Subtotal: ${invoiceData.currency} ${invoiceData.subtotal.toFixed(2)}`);
+    totalsLines.push(`Total Tax: ${invoiceData.currency} ${invoiceData.totalTax.toFixed(2)}`);
+    if (invoiceData.discount > 0) {
+      totalsLines.push(`Discount: -${invoiceData.currency} ${invoiceData.discount.toFixed(2)}`);
+    }
+    totalsLines.push(`Grand Total: ${invoiceData.currency} ${invoiceData.grandTotal.toFixed(2)}`);
+    if (roundingDiff !== 0) {
+      totalsLines.push(`Rounding Off: ${roundingDiff > 0 ? '+' : ''}${invoiceData.currency} ${roundingDiff.toFixed(2)}`);
+    }
+    totalsLines.push(`Total Invoice Amount: ${invoiceData.currency} ${roundedTotal.toFixed(2)}`);
+    totalsLines.push(`Total Paid: ${invoiceData.currency} ${invoiceData.totalPaid.toFixed(2)}`);
+    totalsLines.push(`Balance Amount: ${invoiceData.currency} ${(roundedTotal - invoiceData.totalPaid).toFixed(2)}`);
+    
+    const amountWords = invoiceData.isExport 
+      ? `${invoiceData.currency} ${numberToWords(roundedTotal)} Only`
+      : `INR ${numberToWords(roundedTotal)} Only`;
+    totalsLines.push('');
+    totalsLines.push(`Amount in Words: ${amountWords}`);
+    
+    // Create totals text with special formatting for bold labels
+    // We'll handle bold labels in drawCell by checking line content
+    const bankTotalsRows: TableRow[] = [
+      {
+        cells: [
+          {
+            text: bankDetailsLines.join('\n'),
+            align: 'left',
+            font: font
+          },
+          {
+            text: totalsLines.join('\n'),
+            align: 'right',
+            font: font
+          }
+        ]
       }
+    ];
+    
+    currentY = drawTable({
+      page,
+      startX: PAGE_MARGIN,
+      startY: currentY,
+      tableWidth,
+      columns: [tableWidth * 0.5, tableWidth * 0.5],
+      rows: bankTotalsRows,
+      font,
+      boldFont,
+      fontSize: FONT_SIZE
     });
-
-    // Close the browser
-    await browser.close();
-
-    return Buffer.from(pdf);
+    
+    // Save PDF
+    const pdfBytes = await pdfDoc.save();
+    return Buffer.from(pdfBytes);
   } catch (error) {
     console.error('Error generating PDF:', error);
     throw error;
-  }
-}
-
-// Helper function to get logo base64
-async function getLogoBase64(): Promise<string> {
-  try {
-    const logoPath = path.join(process.cwd(), "public", "logo", "logo.png");
-    if (fs.existsSync(logoPath)) {
-      const imageData = fs.readFileSync(logoPath);
-      return imageData.toString('base64');
-    }
-    return '';
-  } catch (error) {
-    console.error('Error reading logo:', error);
-    return '';
-  }
-}
-
-// Helper function to get signature base64
-async function getSignatureBase64(): Promise<string> {
-  try {
-    const signaturePath = path.join(process.cwd(), "public", "img", "sign.png");
-    if (fs.existsSync(signaturePath)) {
-      const imageData = fs.readFileSync(signaturePath);
-      return imageData.toString('base64');
-    }
-    return '';
-  } catch (error) {
-    console.error('Error reading signature:', error);
-    return '';
   }
 }
 
