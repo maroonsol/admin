@@ -76,6 +76,15 @@ const sections: Section[] = [
     ],
   },
   {
+    id: "services",
+    title: "Services",
+    icon: "🔧",
+    description: "Manage domain, VPS, web hosting, and domain email services",
+    subsections: [
+      { title: "All Services", href: "/services", icon: "🔧" },
+    ],
+  },
+  {
     id: "users",
     title: "Users",
     icon: "👤",

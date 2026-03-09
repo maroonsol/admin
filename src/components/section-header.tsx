@@ -25,6 +25,7 @@ const allSections: Section[] = [
   { title: "Employees", href: "/employees", icon: "👥" },
   { title: "Expenses", href: "/expenses", icon: "💸" },
   { title: "Business Info", href: "/business-info", icon: "🏢" },
+  { title: "Services", href: "/services", icon: "🔧" },
   { title: "Users", href: "/users", icon: "👤" },
 ];
 

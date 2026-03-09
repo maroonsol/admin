@@ -122,11 +122,43 @@ model BusinessInfo {
   // Expense Invoices (for GST payment receipts)
   expenseInvoices   ExpenseInvoice[]
   
+  // Services (domain, VPS, Web Hosting, domain email)
+  services          Service[]
+  
   // Timestamps
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
   
   @@map("business_info")
+}
+
+enum ServiceType {
+  DOMAIN
+  VPS
+  WEB_HOSTING
+  DOMAIN_EMAIL
+}
+
+model Service {
+  id              String       @id @default(cuid())
+  businessId      String
+  business        BusinessInfo @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  
+  serviceType     ServiceType  // Domain, VPS, Web Hosting, Domain Email
+  
+  // Conditional fields based on service type
+  domainName      String?      // when serviceType = DOMAIN
+  serverIp        String?      // when serviceType = VPS or WEB_HOSTING
+  emailName       String?      // when serviceType = DOMAIN_EMAIL
+  
+  startDate       DateTime
+  endDate         DateTime
+  planCode        String?      // optional plan code
+  
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  
+  @@map("services")
 }
 
 model BankAccount {
