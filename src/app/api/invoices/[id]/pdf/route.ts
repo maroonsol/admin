@@ -80,7 +80,16 @@ export async function GET(
         cgstAmount: item.cgstAmount || 0,
         sgstAmount: item.sgstAmount || 0,
         totalAmount: item.totalAmount,
-      }))
+      })),
+      services: ((invoice as { services?: Array<{ serviceType: string; domainName: string | null; serverIp: string | null; emailName: string | null; startDate: Date; endDate: Date; planCode: string | null }> }).services ?? []).map((s) => ({
+        serviceType: s.serviceType,
+        domainName: s.domainName,
+        serverIp: s.serverIp,
+        emailName: s.emailName,
+        startDate: s.startDate instanceof Date ? s.startDate.toISOString().split('T')[0] : String(s.startDate),
+        endDate: s.endDate instanceof Date ? s.endDate.toISOString().split('T')[0] : String(s.endDate),
+        planCode: s.planCode,
+      })),
     };
 
     // Generate PDF

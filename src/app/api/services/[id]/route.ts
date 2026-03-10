@@ -22,6 +22,13 @@ export async function GET(
             businessName: true,
           },
         },
+        invoice: {
+          select: {
+            id: true,
+            invoiceNumber: true,
+            invoiceDate: true,
+          },
+        },
       },
     });
 
@@ -59,6 +66,7 @@ export async function PUT(
       startDate,
       endDate,
       planCode,
+      invoiceId,
     } = data;
 
     const existing = await adminPrisma.service.findUnique({
@@ -95,6 +103,7 @@ export async function PUT(
       startDate?: Date;
       endDate?: Date;
       planCode?: string | null;
+      invoiceId?: string | null;
     } = {};
 
     if (businessId != null) updateData.businessId = businessId;
@@ -103,6 +112,7 @@ export async function PUT(
     if (serverIp !== undefined) updateData.serverIp = serverIp || null;
     if (emailName !== undefined) updateData.emailName = emailName || null;
     if (planCode !== undefined) updateData.planCode = planCode || null;
+    if (invoiceId !== undefined) updateData.invoiceId = invoiceId || null;
     if (startDate) {
       const start = new Date(startDate);
       if (!isNaN(start.getTime())) updateData.startDate = start;
@@ -121,6 +131,13 @@ export async function PUT(
             id: true,
             gstNumber: true,
             businessName: true,
+          },
+        },
+        invoice: {
+          select: {
+            id: true,
+            invoiceNumber: true,
+            invoiceDate: true,
           },
         },
       },

@@ -21,6 +21,13 @@ export async function GET(request: NextRequest) {
             businessName: true,
           },
         },
+        invoice: {
+          select: {
+            id: true,
+            invoiceNumber: true,
+            invoiceDate: true,
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -48,6 +55,7 @@ export async function POST(request: NextRequest) {
       startDate,
       endDate,
       planCode,
+      invoiceId,
     } = data;
 
     if (!businessId) {
@@ -100,6 +108,7 @@ export async function POST(request: NextRequest) {
         startDate: start,
         endDate: end,
         planCode: planCode || null,
+        invoiceId: invoiceId || null,
       },
       include: {
         business: {
@@ -107,6 +116,13 @@ export async function POST(request: NextRequest) {
             id: true,
             gstNumber: true,
             businessName: true,
+          },
+        },
+        invoice: {
+          select: {
+            id: true,
+            invoiceNumber: true,
+            invoiceDate: true,
           },
         },
       },

@@ -45,6 +45,9 @@ export interface CreateInvoiceData {
     sgstAmount: number;
     totalAmount: number;
   }>;
+
+  /** Optional: service IDs to link to this invoice (B2B, "invoice includes services period") */
+  serviceIds?: string[];
 }
 
 export async function getNextInvoiceNumber(invoiceType: 'B2B' | 'B2C' | 'EXPORT', invoiceDate?: string): Promise<string> {
@@ -152,10 +155,10 @@ export async function createInvoice(data: CreateInvoiceData) {
         currency: data.currency,
         exchangeRate: data.exchangeRate,
         lutNumber: data.lutNumber,
-        
+
         // Business ID (for B2B invoices)
         businessId: data.businessId,
-        
+
         // Customer details (for B2C and EXPORT invoices)
         customerName: data.customerName,
         customerPhone: data.customerPhone,
@@ -166,7 +169,7 @@ export async function createInvoice(data: CreateInvoiceData) {
         customerState: data.customerState,
         customerPincode: data.customerPincode,
         customerGst: data.customerGst,
-        
+
         // Financial details
         subtotal: data.subtotal,
         totalTax: data.totalTax,
@@ -176,7 +179,7 @@ export async function createInvoice(data: CreateInvoiceData) {
         roundedAmount: roundedAmount,
         roundedDifference: roundedDifference,
         balanceAmount: Math.max(0, balanceAmount), // Ensure non-negative
-        
+
         // Items
         items: {
           create: data.items.map(item => ({
@@ -198,7 +201,18 @@ export async function createInvoice(data: CreateInvoiceData) {
         business: true
       }
     });
-    
+
+    // Link selected services to this invoice (only for B2B with businessId)
+    if (data.serviceIds && data.serviceIds.length > 0 && invoice.id && invoice.businessId) {
+      await adminPrisma.service.updateMany({
+        where: {
+          id: { in: data.serviceIds },
+          businessId: invoice.businessId
+        },
+        data: { invoiceId: invoice.id }
+      });
+    }
+
     return invoice;
   } catch (error) {
     console.error('Error creating invoice:', error);
@@ -233,10 +247,11 @@ export async function getInvoiceById(id: string) {
       },
       include: {
         items: true,
-        business: true
+        business: true,
+        services: true
       }
     });
-    
+
     return invoice;
   } catch (error) {
     console.error('Error fetching invoice:', error);
@@ -365,12 +380,32 @@ export async function updateInvoice(id: string, data: Partial<CreateInvoiceData>
       });
     }
 
-    // Fetch updated invoice with items
+    // Update service links: unlink all services currently linked to this invoice, then link selected ones
+    if (data.serviceIds !== undefined) {
+      await adminPrisma.service.updateMany({
+        where: { invoiceId: id },
+        data: { invoiceId: null }
+      });
+      if (data.serviceIds.length > 0) {
+        const invoice = await adminPrisma.invoice.findUnique({ where: { id }, select: { businessId: true } });
+        if (invoice?.businessId) {
+          await adminPrisma.service.updateMany({
+            where: {
+              id: { in: data.serviceIds },
+              businessId: invoice.businessId
+            },
+            data: { invoiceId: id }
+          });
+        }
+      }
+    }
+
+    // Fetch updated invoice with items and services
     const updatedInvoice = await adminPrisma.invoice.findUnique({
       where: { id },
-      include: { items: true, business: true }
+      include: { items: true, business: true, services: true }
     });
-    
+
     return updatedInvoice;
   } catch (error) {
     console.error('Error updating invoice:', error);

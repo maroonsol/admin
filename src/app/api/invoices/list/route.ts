@@ -7,6 +7,7 @@ export async function GET(request: NextRequest) {
     const month = searchParams.get('month');
     const year = searchParams.get('year');
     const search = searchParams.get('search');
+    const all = searchParams.get('all') === 'true'; // when true, return all invoices (e.g. for linking to service)
 
     const whereClause: {
       invoiceDate?: {
@@ -16,14 +17,10 @@ export async function GET(request: NextRequest) {
       invoiceNumber?: {
         contains: string;
       };
-      balanceAmount: {
+      balanceAmount?: {
         gt: number;
       };
-    } = {
-      balanceAmount: {
-        gt: 0
-      }
-    };
+    } = all ? {} : { balanceAmount: { gt: 0 } };
 
     // Filter by month and year if provided
     if (month && year) {

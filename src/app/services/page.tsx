@@ -48,6 +48,14 @@ interface BusinessInfo {
   businessName: string;
 }
 
+interface InvoiceOption {
+  id: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  grandTotal?: number;
+  business?: { businessName?: string };
+}
+
 interface Service {
   id: string;
   businessId: string;
@@ -58,9 +66,11 @@ interface Service {
   startDate: string;
   endDate: string;
   planCode: string | null;
+  invoiceId: string | null;
   createdAt: string;
   updatedAt: string;
   business: BusinessInfo | null;
+  invoice?: { id: string; invoiceNumber: string; invoiceDate: string } | null;
 }
 
 const emptyForm = {
@@ -73,7 +83,17 @@ const emptyForm = {
   startDate: "",
   endDate: "",
   planCode: "",
+  invoiceId: "",
+  invoiceYear: "",
+  invoiceMonth: "",
 };
+
+const MONTHS = [
+  { value: "1", label: "January" }, { value: "2", label: "February" }, { value: "3", label: "March" },
+  { value: "4", label: "April" }, { value: "5", label: "May" }, { value: "6", label: "June" },
+  { value: "7", label: "July" }, { value: "8", label: "August" }, { value: "9", label: "September" },
+  { value: "10", label: "October" }, { value: "11", label: "November" }, { value: "12", label: "December" },
+];
 
 export default function ServicesPage() {
   const [services, setServices] = useState<Service[]>([]);
@@ -82,6 +102,8 @@ export default function ServicesPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [formData, setFormData] = useState(emptyForm);
+  const [fetchedInvoices, setFetchedInvoices] = useState<InvoiceOption[]>([]);
+  const [loadingInvoices, setLoadingInvoices] = useState(false);
 
   useEffect(() => {
     fetchServices();
@@ -134,11 +156,36 @@ export default function ServicesPage() {
   const handleAddClick = () => {
     setIsEditMode(false);
     setFormData(emptyForm);
+    setFetchedInvoices([]);
     setIsDialogOpen(true);
+  };
+
+  const fetchInvoicesByMonth = async () => {
+    const year = formData.invoiceYear;
+    const month = formData.invoiceMonth;
+    if (!year || !month) return;
+    setLoadingInvoices(true);
+    setFetchedInvoices([]);
+    try {
+      const res = await fetch(
+        `/api/invoices/list?year=${year}&month=${month}&all=true`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setFetchedInvoices(data);
+      } else {
+        setFetchedInvoices([]);
+      }
+    } catch {
+      setFetchedInvoices([]);
+    } finally {
+      setLoadingInvoices(false);
+    }
   };
 
   const handleEditClick = (service: Service) => {
     setIsEditMode(true);
+    const inv = service.invoice;
     setFormData({
       id: service.id,
       businessId: service.businessId,
@@ -149,7 +196,15 @@ export default function ServicesPage() {
       startDate: service.startDate.slice(0, 10),
       endDate: service.endDate.slice(0, 10),
       planCode: service.planCode || "",
+      invoiceId: service.invoiceId || "",
+      invoiceYear: inv ? new Date(inv.invoiceDate).getFullYear().toString() : "",
+      invoiceMonth: inv ? (new Date(inv.invoiceDate).getMonth() + 1).toString() : "",
     });
+    if (inv) {
+      setFetchedInvoices([{ id: inv.id, invoiceNumber: inv.invoiceNumber, invoiceDate: inv.invoiceDate }]);
+    } else {
+      setFetchedInvoices([]);
+    }
     setIsDialogOpen(true);
   };
 
@@ -227,6 +282,7 @@ export default function ServicesPage() {
       startDate: formData.startDate,
       endDate: formData.endDate,
       planCode: formData.planCode || null,
+      invoiceId: formData.invoiceId || null,
     };
 
     try {
@@ -318,13 +374,14 @@ export default function ServicesPage() {
                 <TableHead>Start Date</TableHead>
                 <TableHead>End Date</TableHead>
                 <TableHead>Plan Code</TableHead>
+                <TableHead>Invoice</TableHead>
                 <TableHead className="w-12"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {services.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-gray-500">
+                  <TableCell colSpan={8} className="text-center text-gray-500">
                     No services found. Click &quot;Add Service&quot; to get started.
                   </TableCell>
                 </TableRow>
@@ -345,6 +402,7 @@ export default function ServicesPage() {
                     <TableCell>{formatDate(service.startDate)}</TableCell>
                     <TableCell>{formatDate(service.endDate)}</TableCell>
                     <TableCell>{service.planCode || "-"}</TableCell>
+                    <TableCell>{service.invoice?.invoiceNumber ?? "-"}</TableCell>
                     <TableCell onClick={(e) => e.stopPropagation()}>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -493,6 +551,87 @@ export default function ServicesPage() {
                 onChange={(e) => handleInputChange("planCode", e.target.value)}
                 placeholder="Plan code if any"
               />
+            </div>
+
+            <div className="space-y-3 rounded-lg border p-4 bg-gray-50/50">
+              <Label className="text-sm font-medium">Link to invoice (optional)</Label>
+              <p className="text-xs text-gray-500">
+                Select invoice year and month, fetch invoices, then choose one to link to this service.
+              </p>
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="min-w-[100px]">
+                  <Label className="text-xs">Year</Label>
+                  <Select
+                    value={formData.invoiceYear}
+                    onValueChange={(v) => {
+                      handleInputChange("invoiceYear", v);
+                      setFetchedInvoices([]);
+                      handleInputChange("invoiceId", "");
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Year" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - i).map((y) => (
+                        <SelectItem key={y} value={y.toString()}>{y}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="min-w-[120px]">
+                  <Label className="text-xs">Month</Label>
+                  <Select
+                    value={formData.invoiceMonth}
+                    onValueChange={(v) => {
+                      handleInputChange("invoiceMonth", v);
+                      setFetchedInvoices([]);
+                      handleInputChange("invoiceId", "");
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Month" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MONTHS.map((m) => (
+                        <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={fetchInvoicesByMonth}
+                  disabled={!formData.invoiceYear || !formData.invoiceMonth || loadingInvoices}
+                >
+                  {loadingInvoices ? "Fetching…" : "Fetch invoices"}
+                </Button>
+              </div>
+              {fetchedInvoices.length > 0 && (
+                <div>
+                  <Label className="text-xs">Select invoice</Label>
+                  <Select
+                    value={formData.invoiceId}
+                    onValueChange={(v) => handleInputChange("invoiceId", v)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select an invoice" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">None</SelectItem>
+                      {fetchedInvoices.map((inv) => (
+                        <SelectItem key={inv.id} value={inv.id}>
+                          {inv.invoiceNumber}
+                          {inv.invoiceDate
+                            ? ` (${new Date(inv.invoiceDate).toLocaleDateString("en-IN")})`
+                            : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end gap-2 pt-4">

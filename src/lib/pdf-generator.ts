@@ -16,6 +16,16 @@ interface InvoiceItem {
   totalAmount: number;
 }
 
+export interface InvoiceServiceRow {
+  serviceType: string;
+  domainName: string | null;
+  serverIp: string | null;
+  emailName: string | null;
+  startDate: string;
+  endDate: string;
+  planCode: string | null;
+}
+
 interface InvoiceData {
   invoiceNumber: string;
   invoiceType: 'B2B' | 'B2C' | 'EXPORT';
@@ -45,6 +55,8 @@ interface InvoiceData {
   balanceAmount: number;
   
   items: InvoiceItem[];
+  /** Services linked to this invoice (for B2B "invoice includes services period") */
+  services?: InvoiceServiceRow[];
 }
 
 export interface TableCell {
@@ -757,7 +769,83 @@ export async function generateInvoicePDF(invoiceData: InvoiceData): Promise<Buff
     });
     
     currentY -= SECTION_SPACING;
-    
+
+    // ============================================
+    // SECTION 3b: SERVICES COVERED (if any)
+    // ============================================
+    const services = invoiceData.services ?? [];
+    if (services.length > 0) {
+      const serviceTypeLabel = (t: string) => {
+        const labels: Record<string, string> = { DOMAIN: 'Domain', VPS: 'VPS', WEB_HOSTING: 'Web Hosting', DOMAIN_EMAIL: 'Domain Email' };
+        return labels[t] ?? t;
+      };
+      const serviceDesc = (s: InvoiceServiceRow) => {
+        if (s.serviceType === 'DOMAIN' && s.domainName) return s.domainName;
+        if ((s.serviceType === 'VPS' || s.serviceType === 'WEB_HOSTING') && s.serverIp) return s.serverIp;
+        if (s.serviceType === 'DOMAIN_EMAIL' && s.emailName) return s.emailName;
+        return '-';
+      };
+      const servicesTitleRow: TableRow[] = [
+        {
+          cells: [{ text: 'Services covered in this invoice', align: 'left', font: boldFont, fontSize: 9 }],
+        },
+      ];
+      currentY = drawTable({
+        page,
+        startX: PAGE_MARGIN,
+        startY: currentY,
+        tableWidth,
+        columns: [tableWidth],
+        rows: servicesTitleRow,
+        font,
+        boldFont,
+        fontSize: FONT_SIZE,
+      });
+      currentY -= SECTION_SPACING;
+      const servicesHeaders = ['S.No', 'Service Type', 'Description', 'Start Date', 'End Date', 'Plan Code'];
+      const servicesData: string[][] = services.map((s, idx) => [
+        String(idx + 1),
+        serviceTypeLabel(s.serviceType),
+        serviceDesc(s),
+        formatDate(s.startDate),
+        formatDate(s.endDate),
+        s.planCode ?? '-',
+      ]);
+      const servicesRows: TableRow[] = [
+        {
+          cells: servicesHeaders.map((h) => ({
+            text: h,
+            align: 'center' as const,
+            font: boldFont,
+            fontSize: 8,
+            background: true,
+            noWrap: false,
+          })),
+        },
+        ...servicesData.map((rowData) => ({
+          cells: rowData.map((text, cellIdx) => ({
+            text,
+            align: (cellIdx === 2 ? 'left' : 'center') as 'left' | 'center' | 'right',
+            noWrap: false,
+          })),
+        })),
+      ];
+      const servicesColCount = servicesHeaders.length;
+      const servicesColWidths = Array(servicesColCount).fill(tableWidth / servicesColCount);
+      currentY = drawTable({
+        page,
+        startX: PAGE_MARGIN,
+        startY: currentY,
+        tableWidth,
+        columns: servicesColWidths,
+        rows: servicesRows,
+        font,
+        boldFont,
+        fontSize: FONT_SIZE,
+      });
+      currentY -= SECTION_SPACING;
+    }
+
     // ============================================
     // SECTION 4: BANK + TOTALS TABLE (2 columns)
     // ============================================

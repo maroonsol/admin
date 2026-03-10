@@ -8,10 +8,30 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import { indianStates, hsnSacCodes, currencies } from "@/lib/data";
 import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { validateGSTNumber } from "@/lib/utils";
+
+const SERVICE_TYPE_LABELS: Record<string, string> = {
+  DOMAIN: "Domain",
+  VPS: "VPS",
+  WEB_HOSTING: "Web Hosting",
+  DOMAIN_EMAIL: "Domain Email",
+};
+
+interface ServiceOption {
+  id: string;
+  businessId: string;
+  serviceType: string;
+  domainName: string | null;
+  serverIp: string | null;
+  emailName: string | null;
+  startDate: string;
+  endDate: string;
+  planCode: string | null;
+}
 
 type InvoiceType = "B2B" | "B2C" | "EXPORT" | null;
 
@@ -81,6 +101,12 @@ export default function EditInvoicePage() {
   const [originalBusinessInfo, setOriginalBusinessInfo] = useState<BusinessInfo | null>(null);
   const [businessId, setBusinessId] = useState<string | null>(null);
 
+  // Services period (B2B only)
+  const [includesServicesPeriod, setIncludesServicesPeriod] = useState(false);
+  const [businessServices, setBusinessServices] = useState<ServiceOption[]>([]);
+  const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
+  const [loadingServices, setLoadingServices] = useState(false);
+
   // Reset B2B-specific states when invoice type changes
   useEffect(() => {
     if (selectedType !== "B2B") {
@@ -90,8 +116,30 @@ export default function EditInvoicePage() {
       setOriginalBusinessInfo(null);
       setLoadingBusinessInfo(false);
       setBusinessId(null);
+      setIncludesServicesPeriod(false);
+      setBusinessServices([]);
+      setSelectedServiceIds([]);
     }
   }, [selectedType]);
+
+  // Fetch services for selected business when "includes services period" is on
+  useEffect(() => {
+    if (!includesServicesPeriod || !businessId) {
+      setBusinessServices([]);
+      if (!includesServicesPeriod) setSelectedServiceIds([]);
+      return;
+    }
+    let cancelled = false;
+    setLoadingServices(true);
+    fetch(`/api/services?businessId=${encodeURIComponent(businessId)}`)
+      .then((res) => res.ok ? res.json() : [])
+      .then((data: ServiceOption[]) => {
+        if (!cancelled) setBusinessServices(data);
+      })
+      .catch(() => { if (!cancelled) setBusinessServices([]); })
+      .finally(() => { if (!cancelled) setLoadingServices(false); });
+    return () => { cancelled = true; };
+  }, [includesServicesPeriod, businessId]);
 
   const [items, setItems] = useState<InvoiceItem[]>([
     {
@@ -174,6 +222,13 @@ export default function EditInvoicePage() {
             setGstValidated(true);
             setBusinessInfoLoaded(true);
           }
+        }
+
+        // Services period: if invoice has linked services, set switch and selected IDs
+        const linkedServices = (invoice as { services?: Array<{ id: string }> }).services;
+        if (linkedServices && linkedServices.length > 0) {
+          setIncludesServicesPeriod(true);
+          setSelectedServiceIds(linkedServices.map((s) => s.id));
         }
       } catch (error) {
         console.error('Error fetching invoice:', error);
@@ -473,6 +528,7 @@ export default function EditInvoicePage() {
       // For B2B invoices, use businessId; for others, use customer details
       if (selectedType === "B2B" && businessId) {
         invoicePayload.businessId = businessId;
+        (invoicePayload as { serviceIds?: string[] }).serviceIds = includesServicesPeriod ? selectedServiceIds : [];
       } else {
         invoicePayload.customerName = invoiceData.customerName;
         invoicePayload.customerPhone = invoiceData.customerPhone;
@@ -792,6 +848,74 @@ export default function EditInvoicePage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Services period - B2B only */}
+      {selectedType === "B2B" && businessId && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Services period (optional)</CardTitle>
+            <p className="text-sm text-gray-500 mt-1">
+              If this invoice covers a services period, enable below and select the services to include.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="includesServicesPeriod"
+                checked={includesServicesPeriod}
+                onCheckedChange={(checked) => {
+                  setIncludesServicesPeriod(!!checked);
+                  if (!checked) setSelectedServiceIds([]);
+                }}
+              />
+              <Label htmlFor="includesServicesPeriod" className="cursor-pointer">
+                This invoice includes services period
+              </Label>
+            </div>
+            {includesServicesPeriod && (
+              <>
+                {loadingServices ? (
+                  <p className="text-sm text-gray-500">Loading services…</p>
+                ) : businessServices.length === 0 ? (
+                  <p className="text-sm text-gray-500">No services found for this business.</p>
+                ) : (
+                  <div className="space-y-2">
+                    <Label>Select services to include in this invoice</Label>
+                    <div className="border rounded-md p-3 max-h-48 overflow-y-auto space-y-2">
+                      {businessServices.map((s) => {
+                        const label = s.serviceType === "DOMAIN" && s.domainName
+                          ? s.domainName
+                          : (s.serviceType === "VPS" || s.serviceType === "WEB_HOSTING") && s.serverIp
+                            ? s.serverIp
+                            : s.serviceType === "DOMAIN_EMAIL" && s.emailName
+                              ? s.emailName
+                              : SERVICE_TYPE_LABELS[s.serviceType] ?? s.serviceType;
+                        const period = `${new Date(s.startDate).toLocaleDateString("en-IN")} – ${new Date(s.endDate).toLocaleDateString("en-IN")}`;
+                        return (
+                          <div key={s.id} className="flex items-center space-x-2">
+                            <Checkbox
+                              id={`service-${s.id}`}
+                              checked={selectedServiceIds.includes(s.id)}
+                              onCheckedChange={(checked) => {
+                                setSelectedServiceIds((prev) =>
+                                  checked ? [...prev, s.id] : prev.filter((id) => id !== s.id)
+                                );
+                              }}
+                            />
+                            <Label htmlFor={`service-${s.id}`} className="cursor-pointer text-sm font-normal">
+                              {SERVICE_TYPE_LABELS[s.serviceType] ?? s.serviceType}: {label} ({period})
+                            </Label>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Items Section */}
       <Card>
