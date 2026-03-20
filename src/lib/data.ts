@@ -77,7 +77,14 @@ export const expenseCategories = [
 
 // HSN/SAC codes for software and GST services
 export const hsnSacCodes = [
-    {
+  {
+    code: "998312",
+    description: "Business consulting services",
+    igst: 18,
+    cgst: 9,
+    sgst: 9
+  },
+  {
     code: "998313",
     description: "IT consulting services",
     igst: 18,
