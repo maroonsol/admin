@@ -2,6 +2,7 @@ import path from "path";
 import fs from "fs";
 import { PDFDocument, PageSizes, StandardFonts, rgb, PDFPage, PDFFont, PDFImage } from 'pdf-lib';
 import { indianStates } from './data';
+import { gstServiceCodeLabel, SERVICE_TYPE_LABELS } from './service-codes';
 
 interface InvoiceItem {
   hsnSac: string;
@@ -18,12 +19,16 @@ interface InvoiceItem {
 
 export interface InvoiceServiceRow {
   serviceType: string;
+  serviceCode?: string | null;
   domainName: string | null;
   serverIp: string | null;
   emailName: string | null;
   startDate: string;
   endDate: string;
   planCode: string | null;
+  gstFilingYear?: number | null;
+  gstFilingMonth?: number | null;
+  gstQuarter?: number | null;
 }
 
 interface InvoiceData {
@@ -775,14 +780,22 @@ export async function generateInvoicePDF(invoiceData: InvoiceData): Promise<Buff
     // ============================================
     const services = invoiceData.services ?? [];
     if (services.length > 0) {
-      const serviceTypeLabel = (t: string) => {
-        const labels: Record<string, string> = { DOMAIN: 'Domain', VPS: 'VPS', WEB_HOSTING: 'Web Hosting', DOMAIN_EMAIL: 'Domain Email' };
-        return labels[t] ?? t;
-      };
+      const serviceTypeLabel = (t: string) => SERVICE_TYPE_LABELS[t] ?? t;
       const serviceDesc = (s: InvoiceServiceRow) => {
         if (s.serviceType === 'DOMAIN' && s.domainName) return s.domainName;
         if ((s.serviceType === 'VPS' || s.serviceType === 'WEB_HOSTING') && s.serverIp) return s.serverIp;
         if (s.serviceType === 'DOMAIN_EMAIL' && s.emailName) return s.emailName;
+        if (s.serviceType === 'GST_SERVICES' && s.serviceCode) {
+          const label = gstServiceCodeLabel(s.serviceCode);
+          const parts = [label];
+          if (s.serviceCode === 'GST_FILING_MON' && s.gstFilingMonth && s.gstFilingYear) {
+            parts.push(`M${String(s.gstFilingMonth).padStart(2, '0')}/${s.gstFilingYear}`);
+          }
+          if (s.serviceCode === 'GST_FILING_QTR' && s.gstQuarter && s.gstFilingYear != null) {
+            parts.push(`Q${s.gstQuarter} FY${s.gstFilingYear}–${String(s.gstFilingYear + 1).slice(-2)}`);
+          }
+          return parts.join(' · ');
+        }
         return '-';
       };
       const servicesTitleRow: TableRow[] = [

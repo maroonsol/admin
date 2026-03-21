@@ -34,13 +34,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { MoreHorizontal } from "lucide-react";
-
-const SERVICE_TYPE_LABELS: Record<string, string> = {
-  DOMAIN: "Domain",
-  VPS: "VPS",
-  WEB_HOSTING: "Web Hosting",
-  DOMAIN_EMAIL: "Domain Email",
-};
+import {
+  SERVICE_TYPE_LABELS,
+  GST_SERVICE_CODES,
+  gstServiceCodeLabel,
+} from "@/lib/service-codes";
 
 interface BusinessInfo {
   id: string;
@@ -60,6 +58,7 @@ interface Service {
   id: string;
   businessId: string;
   serviceType: string;
+  serviceCode: string;
   domainName: string | null;
   serverIp: string | null;
   emailName: string | null;
@@ -67,6 +66,15 @@ interface Service {
   endDate: string;
   planCode: string | null;
   invoiceId: string | null;
+  gstFilingYear: number | null;
+  gstFilingMonth: number | null;
+  gstQuarter: number | null;
+  gstr1FilingDate: string | null;
+  gstr3bFilingDate: string | null;
+  totalGstPaid: number | null;
+  filledSummaryFileUrl: string | null;
+  challanFileUrl: string | null;
+  gstNotes: string | null;
   createdAt: string;
   updatedAt: string;
   business: BusinessInfo | null;
@@ -77,6 +85,7 @@ const emptyForm = {
   id: "",
   businessId: "",
   serviceType: "",
+  gstServiceCode: "",
   domainName: "",
   serverIp: "",
   emailName: "",
@@ -86,13 +95,31 @@ const emptyForm = {
   invoiceId: "",
   invoiceYear: "",
   invoiceMonth: "",
+  gstCalendarYear: "",
+  gstFilingMonth: "",
+  gstFyStartYear: "",
+  gstQuarter: "",
+  gstr1FilingDate: "",
+  gstr3bFilingDate: "",
+  totalGstPaid: "",
+  filledSummaryFileUrl: "",
+  challanFileUrl: "",
+  gstNotes: "",
 };
 
 const MONTHS = [
-  { value: "1", label: "January" }, { value: "2", label: "February" }, { value: "3", label: "March" },
-  { value: "4", label: "April" }, { value: "5", label: "May" }, { value: "6", label: "June" },
-  { value: "7", label: "July" }, { value: "8", label: "August" }, { value: "9", label: "September" },
-  { value: "10", label: "October" }, { value: "11", label: "November" }, { value: "12", label: "December" },
+  { value: "1", label: "January" },
+  { value: "2", label: "February" },
+  { value: "3", label: "March" },
+  { value: "4", label: "April" },
+  { value: "5", label: "May" },
+  { value: "6", label: "June" },
+  { value: "7", label: "July" },
+  { value: "8", label: "August" },
+  { value: "9", label: "September" },
+  { value: "10", label: "October" },
+  { value: "11", label: "November" },
+  { value: "12", label: "December" },
 ];
 
 export default function ServicesPage() {
@@ -104,6 +131,9 @@ export default function ServicesPage() {
   const [formData, setFormData] = useState(emptyForm);
   const [fetchedInvoices, setFetchedInvoices] = useState<InvoiceOption[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
+  const [filledSummaryFile, setFilledSummaryFile] = useState<File | null>(null);
+  const [challanFile, setChallanFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     fetchServices();
@@ -137,26 +167,38 @@ export default function ServicesPage() {
   };
 
   const handleInputChange = (field: string, value: string) => {
-    setFormData((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
-    // Clear type-specific fields when switching service type
-    if (field === "serviceType") {
-      setFormData((prev) => ({
-        ...prev,
-        serviceType: value,
-        domainName: "",
-        serverIp: "",
-        emailName: "",
-      }));
-    }
+    setFormData((prev) => {
+      const next = { ...prev, [field]: value };
+      if (field === "serviceType") {
+        return {
+          ...next,
+          serviceType: value,
+          domainName: "",
+          serverIp: "",
+          emailName: "",
+          gstServiceCode: "",
+          gstCalendarYear: "",
+          gstFilingMonth: "",
+          gstFyStartYear: "",
+          gstQuarter: "",
+          gstr1FilingDate: "",
+          gstr3bFilingDate: "",
+          totalGstPaid: "",
+          filledSummaryFileUrl: "",
+          challanFileUrl: "",
+          gstNotes: "",
+        };
+      }
+      return next;
+    });
   };
 
   const handleAddClick = () => {
     setIsEditMode(false);
     setFormData(emptyForm);
     setFetchedInvoices([]);
+    setFilledSummaryFile(null);
+    setChallanFile(null);
     setIsDialogOpen(true);
   };
 
@@ -186,10 +228,15 @@ export default function ServicesPage() {
   const handleEditClick = (service: Service) => {
     setIsEditMode(true);
     const inv = service.invoice;
+    const code = service.serviceCode || "";
+    const isMonthly = code === "GST_FILING_MON";
+    const isQuarterly = code === "GST_FILING_QTR";
+
     setFormData({
       id: service.id,
       businessId: service.businessId,
       serviceType: service.serviceType,
+      gstServiceCode: service.serviceType === "GST_SERVICES" ? code : "",
       domainName: service.domainName || "",
       serverIp: service.serverIp || "",
       emailName: service.emailName || "",
@@ -199,9 +246,40 @@ export default function ServicesPage() {
       invoiceId: service.invoiceId || "",
       invoiceYear: inv ? new Date(inv.invoiceDate).getFullYear().toString() : "",
       invoiceMonth: inv ? (new Date(inv.invoiceDate).getMonth() + 1).toString() : "",
+      gstCalendarYear:
+        isMonthly && service.gstFilingYear != null
+          ? String(service.gstFilingYear)
+          : "",
+      gstFilingMonth:
+        isMonthly && service.gstFilingMonth != null
+          ? String(service.gstFilingMonth)
+          : "",
+      gstFyStartYear:
+        isQuarterly && service.gstFilingYear != null
+          ? String(service.gstFilingYear)
+          : "",
+      gstQuarter:
+        isQuarterly && service.gstQuarter != null
+          ? String(service.gstQuarter)
+          : "",
+      gstr1FilingDate: service.gstr1FilingDate
+        ? service.gstr1FilingDate.slice(0, 10)
+        : "",
+      gstr3bFilingDate: service.gstr3bFilingDate
+        ? service.gstr3bFilingDate.slice(0, 10)
+        : "",
+      totalGstPaid:
+        service.totalGstPaid != null ? String(service.totalGstPaid) : "",
+      filledSummaryFileUrl: service.filledSummaryFileUrl || "",
+      challanFileUrl: service.challanFileUrl || "",
+      gstNotes: service.gstNotes || "",
     });
+    setFilledSummaryFile(null);
+    setChallanFile(null);
     if (inv) {
-      setFetchedInvoices([{ id: inv.id, invoiceNumber: inv.invoiceNumber, invoiceDate: inv.invoiceDate }]);
+      setFetchedInvoices([
+        { id: inv.id, invoiceNumber: inv.invoiceNumber, invoiceDate: inv.invoiceDate },
+      ]);
     } else {
       setFetchedInvoices([]);
     }
@@ -250,6 +328,54 @@ export default function ServicesPage() {
     }
   };
 
+  const uploadFiles = async (): Promise<{
+    filledSummaryFileUrl?: string;
+    challanFileUrl?: string;
+  }> => {
+    const code = formData.gstServiceCode;
+    if (!formData.businessId || !code) return {};
+
+    let kind: "monthly" | "quarterly" | "registration" | "amendment";
+    if (code === "GST_FILING_MON") kind = "monthly";
+    else if (code === "GST_FILING_QTR") kind = "quarterly";
+    else if (code === "GST_REGISTRATION") kind = "registration";
+    else if (code === "GST_AMENDMENT") kind = "amendment";
+    else return {};
+
+    if (!filledSummaryFile && !challanFile) {
+      return {};
+    }
+
+    const fd = new FormData();
+    fd.append("businessId", formData.businessId);
+    fd.append("kind", kind);
+    if (kind === "monthly") {
+      fd.append("calendarYear", formData.gstCalendarYear);
+      fd.append("month", formData.gstFilingMonth);
+    }
+    if (kind === "quarterly") {
+      fd.append("fyStartYear", formData.gstFyStartYear);
+      fd.append("quarter", formData.gstQuarter);
+    }
+    if (filledSummaryFile) fd.append("filledSummary", filledSummaryFile);
+    if (challanFile) fd.append("challan", challanFile);
+
+    setUploading(true);
+    try {
+      const res = await fetch("/api/services/upload", { method: "POST", body: fd });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.error || "Upload failed");
+      }
+      return {
+        filledSummaryFileUrl: json.filledSummaryFileUrl ?? undefined,
+        challanFileUrl: json.challanFileUrl ?? undefined,
+      };
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -261,29 +387,142 @@ export default function ServicesPage() {
       alert("Please select a service type");
       return;
     }
-    if (!formData.startDate) {
-      alert("Please enter start date");
-      return;
-    }
-    if (!formData.endDate) {
-      alert("Please enter end date");
-      return;
+
+    const gstCode = formData.gstServiceCode;
+
+    if (formData.serviceType === "GST_SERVICES") {
+      if (!gstCode) {
+        alert("Please select a GST service code");
+        return;
+      }
+      if (gstCode === "GST_FILING_MON") {
+        if (!formData.gstCalendarYear || !formData.gstFilingMonth) {
+          alert("Select calendar year and month for monthly filing");
+          return;
+        }
+      }
+      if (gstCode === "GST_FILING_QTR") {
+        if (!formData.gstFyStartYear || !formData.gstQuarter) {
+          alert("Select FY start year (April) and quarter");
+          return;
+        }
+      }
+      const filing =
+        gstCode === "GST_FILING_MON" || gstCode === "GST_FILING_QTR";
+      if (filing) {
+        if (!formData.gstr1FilingDate || !formData.gstr3bFilingDate) {
+          alert("GSTR-1 and GSTR-3B filing dates are required");
+          return;
+        }
+        if (!formData.totalGstPaid) {
+          alert("Total GST paid amount is required for filing");
+          return;
+        }
+        const hasSummary =
+          filledSummaryFile || formData.filledSummaryFileUrl;
+        if (!hasSummary) {
+          alert("Upload a filled summary (or keep an existing file when editing)");
+          return;
+        }
+      } else {
+        if (!formData.startDate || !formData.endDate) {
+          alert("Start and end dates are required");
+          return;
+        }
+      }
+    } else {
+      if (!formData.startDate || !formData.endDate) {
+        alert("Please enter start and end dates");
+        return;
+      }
     }
 
-    const payload = {
+    let summaryUrl = formData.filledSummaryFileUrl || "";
+    let challanUrl = formData.challanFileUrl || "";
+
+    if (
+      formData.serviceType === "GST_SERVICES" &&
+      (filledSummaryFile || challanFile)
+    ) {
+      try {
+        const uploaded = await uploadFiles();
+        if (uploaded.filledSummaryFileUrl) summaryUrl = uploaded.filledSummaryFileUrl;
+        if (uploaded.challanFileUrl) challanUrl = uploaded.challanFileUrl;
+      } catch (err) {
+        alert(err instanceof Error ? err.message : "Upload failed");
+        return;
+      }
+    }
+
+    const payload: Record<string, unknown> = {
       businessId: formData.businessId,
       serviceType: formData.serviceType,
-      domainName: formData.serviceType === "DOMAIN" ? formData.domainName || null : null,
-      serverIp:
+      planCode: formData.planCode || null,
+      invoiceId:
+        formData.invoiceId && formData.invoiceId !== "none"
+          ? formData.invoiceId
+          : null,
+    };
+
+    if (formData.serviceType === "GST_SERVICES") {
+      payload.serviceCode = gstCode;
+      payload.domainName = null;
+      payload.serverIp = null;
+      payload.emailName = null;
+      if (gstCode === "GST_FILING_MON") {
+        payload.gstFilingYear = Number(formData.gstCalendarYear);
+        payload.gstFilingMonth = Number(formData.gstFilingMonth);
+        payload.gstQuarter = null;
+        payload.startDate = formData.startDate;
+        payload.endDate = formData.endDate;
+      } else if (gstCode === "GST_FILING_QTR") {
+        payload.gstFilingYear = Number(formData.gstFyStartYear);
+        payload.gstQuarter = Number(formData.gstQuarter);
+        payload.gstFilingMonth = null;
+        payload.startDate = formData.startDate;
+        payload.endDate = formData.endDate;
+      } else {
+        payload.gstFilingYear = null;
+        payload.gstFilingMonth = null;
+        payload.gstQuarter = null;
+        payload.startDate = formData.startDate;
+        payload.endDate = formData.endDate;
+      }
+      payload.gstr1FilingDate =
+        gstCode === "GST_FILING_MON" || gstCode === "GST_FILING_QTR"
+          ? formData.gstr1FilingDate
+          : null;
+      payload.gstr3bFilingDate =
+        gstCode === "GST_FILING_MON" || gstCode === "GST_FILING_QTR"
+          ? formData.gstr3bFilingDate
+          : null;
+      payload.totalGstPaid =
+        gstCode === "GST_FILING_MON" || gstCode === "GST_FILING_QTR"
+          ? Number(formData.totalGstPaid)
+          : null;
+      payload.filledSummaryFileUrl =
+        gstCode === "GST_FILING_MON" ||
+        gstCode === "GST_FILING_QTR" ||
+        gstCode === "GST_REGISTRATION" ||
+        gstCode === "GST_AMENDMENT"
+          ? summaryUrl || null
+          : null;
+      payload.challanFileUrl = challanUrl || null;
+      payload.gstNotes = formData.gstNotes || null;
+    } else {
+      payload.domainName =
+        formData.serviceType === "DOMAIN" ? formData.domainName || null : null;
+      payload.serverIp =
         formData.serviceType === "VPS" || formData.serviceType === "WEB_HOSTING"
           ? formData.serverIp || null
-          : null,
-      emailName: formData.serviceType === "DOMAIN_EMAIL" ? formData.emailName || null : null,
-      startDate: formData.startDate,
-      endDate: formData.endDate,
-      planCode: formData.planCode || null,
-      invoiceId: formData.invoiceId || null,
-    };
+          : null;
+      payload.emailName =
+        formData.serviceType === "DOMAIN_EMAIL"
+          ? formData.emailName || null
+          : null;
+      payload.startDate = formData.startDate;
+      payload.endDate = formData.endDate;
+    }
 
     try {
       if (isEditMode) {
@@ -297,6 +536,8 @@ export default function ServicesPage() {
           setIsDialogOpen(false);
           setFormData(emptyForm);
           setIsEditMode(false);
+          setFilledSummaryFile(null);
+          setChallanFile(null);
         } else {
           const error = await response.json();
           alert(error.error || "Failed to update service");
@@ -311,6 +552,8 @@ export default function ServicesPage() {
           await fetchServices();
           setIsDialogOpen(false);
           setFormData(emptyForm);
+          setFilledSummaryFile(null);
+          setChallanFile(null);
         } else {
           const error = await response.json();
           alert(error.error || "Failed to create service");
@@ -335,16 +578,16 @@ export default function ServicesPage() {
     if ((s.serviceType === "VPS" || s.serviceType === "WEB_HOSTING") && s.serverIp)
       return s.serverIp;
     if (s.serviceType === "DOMAIN_EMAIL" && s.emailName) return s.emailName;
+    if (s.serviceType === "GST_SERVICES" && s.serviceCode) {
+      return gstServiceCodeLabel(s.serviceCode);
+    }
     return SERVICE_TYPE_LABELS[s.serviceType] || s.serviceType;
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-      </div>
-    );
-  }
+  const isGstFiling =
+    formData.serviceType === "GST_SERVICES" &&
+    (formData.gstServiceCode === "GST_FILING_MON" ||
+      formData.gstServiceCode === "GST_FILING_QTR");
 
   return (
     <div className="space-y-6">
@@ -352,7 +595,7 @@ export default function ServicesPage() {
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Services</h1>
           <p className="text-gray-600 mt-1">
-            Manage domain, VPS, web hosting, and domain email services
+            Manage domain, hosting, email, and GST services
           </p>
         </div>
         <Button onClick={handleAddClick} className="bg-blue-600 hover:bg-blue-700">
@@ -369,11 +612,11 @@ export default function ServicesPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Business</TableHead>
-                <TableHead>Service Type</TableHead>
-                <TableHead>Domain / IP / Email</TableHead>
-                <TableHead>Start Date</TableHead>
-                <TableHead>End Date</TableHead>
-                <TableHead>Plan Code</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Code / detail</TableHead>
+                <TableHead>Start</TableHead>
+                <TableHead>End</TableHead>
+                <TableHead>Plan</TableHead>
                 <TableHead>Invoice</TableHead>
                 <TableHead className="w-12"></TableHead>
               </TableRow>
@@ -398,7 +641,11 @@ export default function ServicesPage() {
                     <TableCell>
                       {SERVICE_TYPE_LABELS[service.serviceType] || service.serviceType}
                     </TableCell>
-                    <TableCell>{getServiceDisplay(service)}</TableCell>
+                    <TableCell>
+                      <span className="text-xs text-gray-500">{service.serviceCode || "—"}</span>
+                      <br />
+                      {getServiceDisplay(service)}
+                    </TableCell>
                     <TableCell>{formatDate(service.startDate)}</TableCell>
                     <TableCell>{formatDate(service.endDate)}</TableCell>
                     <TableCell>{service.planCode || "-"}</TableCell>
@@ -480,9 +727,34 @@ export default function ServicesPage() {
                   <SelectItem value="VPS">VPS</SelectItem>
                   <SelectItem value="WEB_HOSTING">Web Hosting</SelectItem>
                   <SelectItem value="DOMAIN_EMAIL">Domain Email</SelectItem>
+                  <SelectItem value="GST_SERVICES">GST services</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+
+            {formData.serviceType === "GST_SERVICES" && (
+              <div>
+                <Label>GST service *</Label>
+                <Select
+                  value={formData.gstServiceCode}
+                  onValueChange={(value) =>
+                    setFormData((prev) => ({ ...prev, gstServiceCode: value }))
+                  }
+                  required
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select GST service" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {GST_SERVICE_CODES.map((g) => (
+                      <SelectItem key={g.code} value={g.code}>
+                        {g.label} ({g.code})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             {formData.serviceType === "DOMAIN" && (
               <div>
@@ -520,28 +792,250 @@ export default function ServicesPage() {
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label htmlFor="startDate">Start Date *</Label>
-                <Input
-                  id="startDate"
-                  type="date"
-                  value={formData.startDate}
-                  onChange={(e) => handleInputChange("startDate", e.target.value)}
-                  required
-                />
+            {formData.serviceType === "GST_SERVICES" &&
+              formData.gstServiceCode === "GST_FILING_MON" && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>Calendar year *</Label>
+                    <Input
+                      type="number"
+                      value={formData.gstCalendarYear}
+                      onChange={(e) =>
+                        handleInputChange("gstCalendarYear", e.target.value)
+                      }
+                      placeholder="e.g. 2026"
+                    />
+                  </div>
+                  <div>
+                    <Label>Month *</Label>
+                    <Select
+                      value={formData.gstFilingMonth}
+                      onValueChange={(v) => handleInputChange("gstFilingMonth", v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Month" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {MONTHS.map((m) => (
+                          <SelectItem key={m.value} value={m.value}>
+                            {m.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              )}
+
+            {formData.serviceType === "GST_SERVICES" &&
+              formData.gstServiceCode === "GST_FILING_QTR" && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>FY start year (April) *</Label>
+                    <Input
+                      type="number"
+                      value={formData.gstFyStartYear}
+                      onChange={(e) =>
+                        handleInputChange("gstFyStartYear", e.target.value)
+                      }
+                      placeholder="e.g. 2025 for FY 2025-26"
+                    />
+                  </div>
+                  <div>
+                    <Label>Quarter *</Label>
+                    <Select
+                      value={formData.gstQuarter}
+                      onValueChange={(v) => handleInputChange("gstQuarter", v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Quarter" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1">Q1 (Apr–Jun)</SelectItem>
+                        <SelectItem value="2">Q2 (Jul–Sep)</SelectItem>
+                        <SelectItem value="3">Q3 (Oct–Dec)</SelectItem>
+                        <SelectItem value="4">Q4 (Jan–Mar)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              )}
+
+            {isGstFiling && (
+              <>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="gstr1">GSTR-1 filing date *</Label>
+                    <Input
+                      id="gstr1"
+                      type="date"
+                      value={formData.gstr1FilingDate}
+                      onChange={(e) =>
+                        handleInputChange("gstr1FilingDate", e.target.value)
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="gstr3b">GSTR-3B filing date *</Label>
+                    <Input
+                      id="gstr3b"
+                      type="date"
+                      value={formData.gstr3bFilingDate}
+                      onChange={(e) =>
+                        handleInputChange("gstr3bFilingDate", e.target.value)
+                      }
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label>Total GST paid (₹) *</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={formData.totalGstPaid}
+                    onChange={(e) =>
+                      handleInputChange("totalGstPaid", e.target.value)
+                    }
+                  />
+                </div>
+                <div className="space-y-2 rounded border p-3 bg-muted/30">
+                  <Label>Uploads</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Filled summary is required for filing. Challan optional. Configure{" "}
+                    <code className="text-xs">INTERNAL_FILES_UPLOAD_URL</code> for uploads.
+                  </p>
+                  <div>
+                    <Label className="text-xs">Filled summary PDF / file</Label>
+                    <Input
+                      type="file"
+                      onChange={(e) =>
+                        setFilledSummaryFile(e.target.files?.[0] ?? null)
+                      }
+                    />
+                    {formData.filledSummaryFileUrl && (
+                      <a
+                        href={formData.filledSummaryFileUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs text-blue-600 block mt-1"
+                      >
+                        Current file
+                      </a>
+                    )}
+                  </div>
+                  <div>
+                    <Label className="text-xs">Challan (optional)</Label>
+                    <Input
+                      type="file"
+                      onChange={(e) => setChallanFile(e.target.files?.[0] ?? null)}
+                    />
+                    {formData.challanFileUrl && (
+                      <a
+                        href={formData.challanFileUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs text-blue-600 block mt-1"
+                      >
+                        Current file
+                      </a>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {formData.serviceType === "GST_SERVICES" &&
+              (formData.gstServiceCode === "GST_REGISTRATION" ||
+                formData.gstServiceCode === "GST_AMENDMENT") && (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="gstStart">Start date *</Label>
+                      <Input
+                        id="gstStart"
+                        type="date"
+                        value={formData.startDate}
+                        onChange={(e) =>
+                          handleInputChange("startDate", e.target.value)
+                        }
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="gstEnd">End date *</Label>
+                      <Input
+                        id="gstEnd"
+                        type="date"
+                        value={formData.endDate}
+                        onChange={(e) =>
+                          handleInputChange("endDate", e.target.value)
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <Label>Notes (optional)</Label>
+                    <Input
+                      value={formData.gstNotes}
+                      onChange={(e) =>
+                        handleInputChange("gstNotes", e.target.value)
+                      }
+                      placeholder="Reference / remarks"
+                    />
+                  </div>
+                  <div className="space-y-2 rounded border p-3 bg-muted/30">
+                    <Label>Documents (optional)</Label>
+                    <div>
+                      <Label className="text-xs">Filled summary / certificate</Label>
+                      <Input
+                        type="file"
+                        onChange={(e) =>
+                          setFilledSummaryFile(e.target.files?.[0] ?? null)
+                        }
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Other (e.g. challan)</Label>
+                      <Input
+                        type="file"
+                        onChange={(e) =>
+                          setChallanFile(e.target.files?.[0] ?? null)
+                        }
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+
+            {formData.serviceType !== "GST_SERVICES" && (
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="startDate">Start Date *</Label>
+                  <Input
+                    id="startDate"
+                    type="date"
+                    value={formData.startDate}
+                    onChange={(e) => handleInputChange("startDate", e.target.value)}
+                    required
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="endDate">End Date *</Label>
+                  <Input
+                    id="endDate"
+                    type="date"
+                    value={formData.endDate}
+                    onChange={(e) => handleInputChange("endDate", e.target.value)}
+                    required
+                  />
+                </div>
               </div>
-              <div>
-                <Label htmlFor="endDate">End Date *</Label>
-                <Input
-                  id="endDate"
-                  type="date"
-                  value={formData.endDate}
-                  onChange={(e) => handleInputChange("endDate", e.target.value)}
-                  required
-                />
-              </div>
-            </div>
+            )}
+
+            {formData.serviceType === "GST_SERVICES" && isGstFiling && (
+              <p className="text-xs text-muted-foreground">
+                Period start/end are set automatically from the month or quarter you selected.
+              </p>
+            )}
 
             <div>
               <Label htmlFor="planCode">Plan Code (optional)</Label>
@@ -574,7 +1068,9 @@ export default function ServicesPage() {
                     </SelectTrigger>
                     <SelectContent>
                       {Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - i).map((y) => (
-                        <SelectItem key={y} value={y.toString()}>{y}</SelectItem>
+                        <SelectItem key={y} value={y.toString()}>
+                          {y}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -594,7 +1090,9 @@ export default function ServicesPage() {
                     </SelectTrigger>
                     <SelectContent>
                       {MONTHS.map((m) => (
-                        <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                        <SelectItem key={m.value} value={m.value}>
+                          {m.label}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -612,14 +1110,16 @@ export default function ServicesPage() {
                 <div>
                   <Label className="text-xs">Select invoice</Label>
                   <Select
-                    value={formData.invoiceId}
-                    onValueChange={(v) => handleInputChange("invoiceId", v)}
+                    value={formData.invoiceId ? formData.invoiceId : "none"}
+                    onValueChange={(v) =>
+                      handleInputChange("invoiceId", v === "none" ? "" : v)
+                    }
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select an invoice" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">None</SelectItem>
+                      <SelectItem value="none">None</SelectItem>
                       {fetchedInvoices.map((inv) => (
                         <SelectItem key={inv.id} value={inv.id}>
                           {inv.invoiceNumber}
@@ -652,12 +1152,18 @@ export default function ServicesPage() {
                   setIsDialogOpen(false);
                   setIsEditMode(false);
                   setFormData(emptyForm);
+                  setFilledSummaryFile(null);
+                  setChallanFile(null);
                 }}
               >
                 Cancel
               </Button>
-              <Button type="submit" className="bg-blue-600 hover:bg-blue-700">
-                {isEditMode ? "Update Service" : "Add Service"}
+              <Button
+                type="submit"
+                className="bg-blue-600 hover:bg-blue-700"
+                disabled={uploading}
+              >
+                {uploading ? "Uploading…" : isEditMode ? "Update Service" : "Add Service"}
               </Button>
             </div>
           </form>

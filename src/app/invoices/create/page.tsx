@@ -9,20 +9,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { indianStates, hsnSacCodes, currencies } from "@/lib/data";
+import { SERVICE_TYPE_LABELS, gstServiceCodeLabel } from "@/lib/service-codes";
 import { ArrowLeft, Plus, Trash2, Download } from "lucide-react";
 import Link from "next/link";
-
-const SERVICE_TYPE_LABELS: Record<string, string> = {
-  DOMAIN: "Domain",
-  VPS: "VPS",
-  WEB_HOSTING: "Web Hosting",
-  DOMAIN_EMAIL: "Domain Email",
-};
 
 interface ServiceOption {
   id: string;
   businessId: string;
   serviceType: string;
+  serviceCode?: string | null;
   domainName: string | null;
   serverIp: string | null;
   emailName: string | null;
@@ -974,7 +969,9 @@ export default function CreateInvoicePage() {
                             ? s.serverIp
                             : s.serviceType === "DOMAIN_EMAIL" && s.emailName
                               ? s.emailName
-                              : SERVICE_TYPE_LABELS[s.serviceType] ?? s.serviceType;
+                              : s.serviceType === "GST_SERVICES" && s.serviceCode
+                                ? gstServiceCodeLabel(s.serviceCode)
+                                : SERVICE_TYPE_LABELS[s.serviceType] ?? s.serviceType;
                         const period = `${new Date(s.startDate).toLocaleDateString("en-IN")} – ${new Date(s.endDate).toLocaleDateString("en-IN")}`;
                         return (
                           <div key={s.id} className="flex items-center space-x-2">

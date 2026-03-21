@@ -81,14 +81,30 @@ export async function GET(
         sgstAmount: item.sgstAmount || 0,
         totalAmount: item.totalAmount,
       })),
-      services: ((invoice as { services?: Array<{ serviceType: string; domainName: string | null; serverIp: string | null; emailName: string | null; startDate: Date; endDate: Date; planCode: string | null }> }).services ?? []).map((s) => ({
+      services: ((invoice as { services?: Array<{
+        serviceType: string;
+        serviceCode?: string | null;
+        domainName: string | null;
+        serverIp: string | null;
+        emailName: string | null;
+        startDate: Date;
+        endDate: Date;
+        planCode: string | null;
+        gstFilingYear?: number | null;
+        gstFilingMonth?: number | null;
+        gstQuarter?: number | null;
+      }> }).services ?? []).map((s) => ({
         serviceType: s.serviceType,
+        serviceCode: s.serviceCode,
         domainName: s.domainName,
         serverIp: s.serverIp,
         emailName: s.emailName,
         startDate: s.startDate instanceof Date ? s.startDate.toISOString().split('T')[0] : String(s.startDate),
         endDate: s.endDate instanceof Date ? s.endDate.toISOString().split('T')[0] : String(s.endDate),
         planCode: s.planCode,
+        gstFilingYear: s.gstFilingYear,
+        gstFilingMonth: s.gstFilingMonth,
+        gstQuarter: s.gstQuarter,
       })),
     };
 

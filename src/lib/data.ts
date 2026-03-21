@@ -395,6 +395,11 @@ export const companyInfo = {
   }
 };
 
+export {
+  getIndianFinancialYearLabel,
+  financialYearLabelFromFyStartYear,
+} from "./service-codes";
+
 // Function to get current financial year
 export function getCurrentFinancialYear(): string {
   const now = new Date();

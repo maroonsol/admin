@@ -140,6 +140,7 @@ enum ServiceType {
   VPS
   WEB_HOSTING
   DOMAIN_EMAIL
+  GST_SERVICES
 }
 
 model Service {
@@ -151,7 +152,10 @@ model Service {
   invoiceId       String?
   invoice         Invoice?     @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   
-  serviceType     ServiceType  // Domain, VPS, Web Hosting, Domain Email
+  serviceType     ServiceType  // Domain, VPS, Web Hosting, Domain Email, GST services
+  
+  // Short code: DOM, VPS, WEB_HOST, DOM_EMAIL, GST_FILING_MON, GST_FILING_QTR, GST_REGISTRATION, GST_AMENDMENT
+  serviceCode     String       @default("")
   
   // Conditional fields based on service type
   domainName      String?      // when serviceType = DOMAIN
@@ -161,6 +165,17 @@ model Service {
   startDate       DateTime
   endDate         DateTime
   planCode        String?      // optional plan code
+  
+  // GST services (when serviceType = GST_SERVICES)
+  gstFilingYear         Int?      // calendar year (e.g. 2026 for March 2026)
+  gstFilingMonth        Int?      // 1–12 when monthly filing
+  gstQuarter            Int?      // 1–4 when quarterly filing
+  gstr1FilingDate       DateTime?
+  gstr3bFilingDate      DateTime?
+  totalGstPaid          Float?
+  filledSummaryFileUrl  String?
+  challanFileUrl        String?
+  gstNotes              String?   // registration / amendment notes
   
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt

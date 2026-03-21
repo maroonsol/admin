@@ -14,17 +14,13 @@ import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { validateGSTNumber } from "@/lib/utils";
 
-const SERVICE_TYPE_LABELS: Record<string, string> = {
-  DOMAIN: "Domain",
-  VPS: "VPS",
-  WEB_HOSTING: "Web Hosting",
-  DOMAIN_EMAIL: "Domain Email",
-};
+import { SERVICE_TYPE_LABELS, gstServiceCodeLabel } from "@/lib/service-codes";
 
 interface ServiceOption {
   id: string;
   businessId: string;
   serviceType: string;
+  serviceCode?: string | null;
   domainName: string | null;
   serverIp: string | null;
   emailName: string | null;
@@ -889,7 +885,9 @@ export default function EditInvoicePage() {
                             ? s.serverIp
                             : s.serviceType === "DOMAIN_EMAIL" && s.emailName
                               ? s.emailName
-                              : SERVICE_TYPE_LABELS[s.serviceType] ?? s.serviceType;
+                              : s.serviceType === "GST_SERVICES" && s.serviceCode
+                                ? gstServiceCodeLabel(s.serviceCode)
+                                : SERVICE_TYPE_LABELS[s.serviceType] ?? s.serviceType;
                         const period = `${new Date(s.startDate).toLocaleDateString("en-IN")} – ${new Date(s.endDate).toLocaleDateString("en-IN")}`;
                         return (
                           <div key={s.id} className="flex items-center space-x-2">
