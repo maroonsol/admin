@@ -1,12 +1,9 @@
 <?php
 /**
  * Deploy as index.php on internalfiles.maroonsol.com (or set INTERNAL_FILES_UPLOAD_URL to this script).
- *
- * Environment: set UPLOAD_SECRET in this file or via getenv('INTERNAL_FILES_UPLOAD_SECRET') if you configure the server.
- * Files are stored under: {BASE_DIR}/client/{businessId}/accounts/GST/...
+ * No authentication — restrict by firewall / nginx allowlist in production if the URL is public.
  *
  * POST fields:
- *   secret              — must match Next.js INTERNAL_FILES_UPLOAD_SECRET
  *   business_id         — BusinessInfo id (alphanumeric/cuid)
  *   kind                — monthly | quarterly | registration | amendment
  *   fiscal_year         — e.g. 2025-26 (for monthly/quarterly filing)
@@ -26,8 +23,6 @@ $PUBLIC_BASE_URL = 'https://internalfiles.maroonsol.com'; // URL prefix for retu
 if (!is_dir($BASE_DIR)) {
     mkdir($BASE_DIR, 0755, true);
 }
-// Prefer server env; fallback for quick drop-in:
-$UPLOAD_SECRET = getenv('INTERNAL_FILES_UPLOAD_SECRET') ?: 'CHANGE_ME_TO_MATCH_NEXTJS';
 
 // --- Helpers ---
 function json_fail(int $code, string $msg): void {
@@ -37,7 +32,7 @@ function json_fail(int $code, string $msg): void {
 }
 
 function safe_business_id(string $id): bool {
-    return (bool) preg_match('/^[a-zA-Z0-9_-]{8,64}$/', $id);
+    return (bool) preg_match('/^[a-zA-Z0-9_-]{8,128}$/', $id);
 }
 
 function safe_fiscal_year(string $fy): bool {
@@ -75,11 +70,6 @@ function save_upload(string $field, string $destDir, string $prefix): ?string {
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     json_fail(405, 'Method not allowed');
-}
-
-$secret = $_POST['secret'] ?? '';
-if ($secret === '' || !hash_equals($UPLOAD_SECRET, $secret)) {
-    json_fail(403, 'Forbidden');
 }
 
 $businessId = $_POST['business_id'] ?? '';
@@ -122,7 +112,6 @@ $toUrl = function (?string $absPath) use ($PUBLIC_BASE_URL, $BASE_DIR) {
     return rtrim($PUBLIC_BASE_URL, '/') . '/storage/' . $rel;
 };
 
-// If document root serves /storage as alias to $BASE_DIR, URLs work. Adjust if you map differently.
 $filledSummaryFileUrl = $toUrl($summaryPath);
 $challanFileUrl = $toUrl($challanPath);
 

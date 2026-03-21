@@ -3,11 +3,9 @@
 1. Copy `internalfiles-index.php` to your host as `index.php` (or any URL you configure).
 2. Create a writable `storage` directory next to `index.php` (or change `$BASE_DIR` in the script).
 3. Map the web server so files under `storage/` are served (e.g. `https://internalfiles.maroonsol.com/storage/...`).
-4. Set the same secret in PHP and in the Next.js admin app:
-   - **PHP:** `getenv('INTERNAL_FILES_UPLOAD_SECRET')` or edit `$UPLOAD_SECRET` in the script.
-   - **Admin `.env`:**  
-     `INTERNAL_FILES_UPLOAD_URL=https://internalfiles.maroonsol.com/index.php`  
-     `INTERNAL_FILES_UPLOAD_SECRET=your-long-random-secret`
+4. **Admin `.env`:** `INTERNAL_FILES_UPLOAD_URL=https://internalfiles.maroonsol.com/index.php`
+
+There is **no shared secret** in the script. If the upload URL is reachable from the public internet, anyone could POST files — use **firewall / nginx allowlist** (e.g. only your admin server IP) or HTTPS + private network.
 
 ## Folder layout (created by PHP)
 

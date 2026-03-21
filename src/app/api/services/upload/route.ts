@@ -9,18 +9,16 @@ import {
 export const runtime = 'nodejs';
 
 /**
- * Proxies GST document uploads to internalfiles.maroonsol.com (PHP).
- * Configure INTERNAL_FILES_UPLOAD_URL (e.g. https://internalfiles.maroonsol.com/index.php)
- * and INTERNAL_FILES_UPLOAD_SECRET (must match PHP).
+ * Proxies GST document uploads to the PHP host (INTERNAL_FILES_UPLOAD_URL).
+ * No shared secret — restrict access at your reverse proxy / firewall if needed.
  */
 export async function POST(request: NextRequest) {
-  const secret = process.env.INTERNAL_FILES_UPLOAD_SECRET;
-  const baseUrl = process.env.INTERNAL_FILES_UPLOAD_URL;
-  if (!secret || !baseUrl) {
+  const baseUrl = process.env.INTERNAL_FILES_UPLOAD_URL?.trim();
+  if (!baseUrl) {
     return NextResponse.json(
       {
         error:
-          'File upload is not configured. Set INTERNAL_FILES_UPLOAD_URL and INTERNAL_FILES_UPLOAD_SECRET.',
+          'File upload is not configured. Set INTERNAL_FILES_UPLOAD_URL in .env.',
       },
       { status: 503 }
     );
@@ -79,7 +77,6 @@ export async function POST(request: NextRequest) {
   }
 
   const out = new FormData();
-  out.append('secret', secret);
   out.append('business_id', businessId);
   out.append('kind', kind);
   if (fiscalYear) out.append('fiscal_year', fiscalYear);
