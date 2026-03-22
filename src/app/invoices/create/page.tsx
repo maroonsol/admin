@@ -346,8 +346,11 @@ export default function CreateInvoicePage() {
     }));
   };
 
-  const persistBusinessMasterFromForm = async () => {
-    if (!selectedBusiness || selectedType !== "B2B") return;
+  const cleanGst = (g: string) => g.replace(/\s+/g, "").toUpperCase();
+
+  /** Returns the additional-GST row id to store on the invoice (null if primary). IDs change after business PUT. */
+  const persistBusinessMasterFromForm = async (): Promise<string | null> => {
+    if (!selectedBusiness || selectedType !== "B2B") return null;
     const additionalGstLocations = (selectedBusiness.additionalGstLocations ?? []).map((r) => {
       if (selectedGstLocationKey !== "primary" && r.id === selectedGstLocationKey) {
         return {
@@ -411,9 +414,25 @@ export default function CreateInvoicePage() {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || "Failed to update business master record");
     }
-    const updated = await res.json();
+    const updated = (await res.json()) as BusinessInfo;
     setSelectedBusiness(updated);
     setOriginalBusinessInfo(updated);
+
+    if (selectedGstLocationKey === "primary") {
+      return null;
+    }
+    const targetGst = cleanGst(invoiceData.customerGst);
+    const row = updated.additionalGstLocations?.find((r) => cleanGst(r.gstNumber) === targetGst);
+    if (row) {
+      setSelectedGstLocationKey(row.id);
+      return row.id;
+    }
+    if (selectedGstLocationKey !== null && selectedGstLocationKey !== "primary") {
+      throw new Error(
+        "Could not resolve additional GST after saving business. Try again or re-select the billing GST."
+      );
+    }
+    return null;
   };
 
   const handleItemChange = (itemId: string, field: string, value: string | number) => {
@@ -523,11 +542,13 @@ export default function CreateInvoicePage() {
           return;
         }
 
-        if (businessId && selectedBusiness) {
-          await persistBusinessMasterFromForm();
-        }
       }
-      
+
+      let resolvedBusinessAdditionalGstId: string | null = null;
+      if (selectedType === "B2B" && businessId && selectedBusiness) {
+        resolvedBusinessAdditionalGstId = await persistBusinessMasterFromForm();
+      }
+
       if (items.some(item => !item.hsnSac || !item.description || item.qty <= 0 || item.rate <= 0)) {
         alert("Please fill in all item details correctly");
         return;
@@ -598,12 +619,11 @@ export default function CreateInvoicePage() {
       
       if (selectedType === "B2B" && businessId) {
         invoicePayload.businessId = businessId;
-        const useDifferent =
-          selectedGstLocationKey !== null &&
-          selectedGstLocationKey !== "primary" &&
-          (selectedBusiness?.additionalGstLocations?.length ?? 0) > 0;
+        const useDifferent = resolvedBusinessAdditionalGstId !== null;
         invoicePayload.differentGst = useDifferent;
-        invoicePayload.businessAdditionalGstId = useDifferent ? selectedGstLocationKey : null;
+        invoicePayload.businessAdditionalGstId = useDifferent
+          ? resolvedBusinessAdditionalGstId
+          : null;
         invoicePayload.customerName = invoiceData.customerName;
         invoicePayload.customerPhone = invoiceData.customerPhone;
         invoicePayload.customerEmail = invoiceData.customerEmail;

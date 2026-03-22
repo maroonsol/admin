@@ -137,8 +137,67 @@ export async function getNextCreditNumber(creditDate?: string): Promise<number> 
   return nextCreditNumber;
 }
 
+function normalizeGstNumber(g: string) {
+  return g.replace(/\s+/g, '').toUpperCase();
+}
+
+/**
+ * After business PUT, additional-GST row ids change. Resolve a valid FK from businessId + billing GST,
+ * or clear when billing matches the primary registration.
+ */
+async function resolveB2bAdditionalGstForInvoice(data: {
+  businessId?: string;
+  businessAdditionalGstId?: string | null;
+  customerGst?: string;
+}): Promise<{ businessAdditionalGstId: string | null; differentGst: boolean }> {
+  if (!data.businessId) {
+    return { businessAdditionalGstId: null, differentGst: false };
+  }
+
+  const clientId = data.businessAdditionalGstId || null;
+  if (clientId) {
+    const valid = await adminPrisma.businessAdditionalGst.findFirst({
+      where: { id: clientId, businessId: data.businessId },
+    });
+    if (valid) {
+      return { businessAdditionalGstId: valid.id, differentGst: true };
+    }
+  }
+
+  if (!data.customerGst?.trim()) {
+    return { businessAdditionalGstId: null, differentGst: false };
+  }
+
+  const biz = await adminPrisma.businessInfo.findUnique({
+    where: { id: data.businessId },
+    select: { gstNumber: true },
+  });
+  if (!biz) {
+    return { businessAdditionalGstId: null, differentGst: false };
+  }
+
+  const billing = normalizeGstNumber(data.customerGst);
+  if (normalizeGstNumber(biz.gstNumber) === billing) {
+    return { businessAdditionalGstId: null, differentGst: false };
+  }
+
+  const alt = await adminPrisma.businessAdditionalGst.findFirst({
+    where: { businessId: data.businessId, gstNumber: billing },
+  });
+  if (alt) {
+    return { businessAdditionalGstId: alt.id, differentGst: true };
+  }
+
+  return { businessAdditionalGstId: null, differentGst: false };
+}
+
 export async function createInvoice(data: CreateInvoiceData) {
   try {
+    const gstLink =
+      data.invoiceType === 'B2B' && data.businessId
+        ? await resolveB2bAdditionalGstForInvoice(data)
+        : { businessAdditionalGstId: null as string | null, differentGst: false };
+
     // Get the next invoice number based on invoice date
     const invoiceNumber = await getNextInvoiceNumber(data.invoiceType, data.invoiceDate);
     
@@ -162,8 +221,8 @@ export async function createInvoice(data: CreateInvoiceData) {
 
         // Business ID (for B2B invoices)
         businessId: data.businessId,
-        differentGst: data.differentGst ?? false,
-        businessAdditionalGstId: data.businessAdditionalGstId || null,
+        differentGst: gstLink.differentGst,
+        businessAdditionalGstId: gstLink.businessAdditionalGstId,
 
         // Customer / billing snapshot
         customerName: data.customerName,
@@ -371,7 +430,38 @@ export async function updateInvoice(id: string, data: Partial<CreateInvoiceData>
     
     if (data.roundedAmount !== undefined) updateData.roundedAmount = data.roundedAmount;
     if (data.roundedDifference !== undefined) updateData.roundedDifference = data.roundedDifference;
-    
+
+    const invBefore = await adminPrisma.invoice.findUnique({
+      where: { id },
+      select: {
+        invoiceType: true,
+        businessId: true,
+        customerGst: true,
+        businessAdditionalGstId: true,
+      },
+    });
+
+    const effectiveType =
+      (updateData.invoiceType as string | undefined) ?? invBefore?.invoiceType;
+    const mergedBusinessId =
+      updateData.businessId !== undefined ? updateData.businessId : invBefore?.businessId;
+    const mergedCustomerGst =
+      updateData.customerGst !== undefined ? updateData.customerGst : invBefore?.customerGst;
+    const mergedAdditionalId =
+      updateData.businessAdditionalGstId !== undefined
+        ? updateData.businessAdditionalGstId
+        : invBefore?.businessAdditionalGstId;
+
+    if (effectiveType === 'B2B' && mergedBusinessId) {
+      const gstLink = await resolveB2bAdditionalGstForInvoice({
+        businessId: mergedBusinessId,
+        customerGst: mergedCustomerGst ?? undefined,
+        businessAdditionalGstId: mergedAdditionalId,
+      });
+      updateData.differentGst = gstLink.differentGst;
+      updateData.businessAdditionalGstId = gstLink.businessAdditionalGstId;
+    }
+
     // Update invoice
     await adminPrisma.invoice.update({
       where: { id },
