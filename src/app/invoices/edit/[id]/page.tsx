@@ -31,6 +31,17 @@ interface ServiceOption {
 
 type InvoiceType = "B2B" | "B2C" | "EXPORT" | null;
 
+interface BusinessAdditionalGst {
+  id: string;
+  gstNumber: string;
+  businessAddress?: string | null;
+  businessAddress2?: string | null;
+  businessDistrict?: string | null;
+  businessState?: string | null;
+  businessStateCode?: string | null;
+  businessPincode?: string | null;
+}
+
 interface BusinessInfo {
   id: string;
   businessName: string;
@@ -43,6 +54,8 @@ interface BusinessInfo {
   businessState?: string | null;
   businessStateCode?: string | null;
   businessPincode?: string | null;
+  multipleGst?: boolean;
+  additionalGstLocations?: BusinessAdditionalGst[];
 }
 
 interface InvoiceItem {
@@ -75,6 +88,7 @@ export default function EditInvoicePage() {
     customerAddress2: "",
     customerDistrict: "",
     customerState: "",
+    customerStateCode: "",
     customerPincode: "",
     customerGst: "",
     
@@ -96,6 +110,10 @@ export default function EditInvoicePage() {
   const [businessInfoLoaded, setBusinessInfoLoaded] = useState(false);
   const [originalBusinessInfo, setOriginalBusinessInfo] = useState<BusinessInfo | null>(null);
   const [businessId, setBusinessId] = useState<string | null>(null);
+  const [selectedBusiness, setSelectedBusiness] = useState<BusinessInfo | null>(null);
+  const [selectedGstLocationKey, setSelectedGstLocationKey] = useState<
+    null | "primary" | string
+  >(null);
 
   // Services period (B2B only)
   const [includesServicesPeriod, setIncludesServicesPeriod] = useState(false);
@@ -112,6 +130,8 @@ export default function EditInvoicePage() {
       setOriginalBusinessInfo(null);
       setLoadingBusinessInfo(false);
       setBusinessId(null);
+      setSelectedBusiness(null);
+      setSelectedGstLocationKey(null);
       setIncludesServicesPeriod(false);
       setBusinessServices([]);
       setSelectedServiceIds([]);
@@ -162,28 +182,64 @@ export default function EditInvoicePage() {
           throw new Error('Failed to fetch invoice');
         }
         const invoice = await response.json();
-        
+        const inv = invoice as typeof invoice & {
+          differentGst?: boolean;
+          businessAdditionalGstId?: string | null;
+          customerStateCode?: string | null;
+        };
+
         // Set invoice type
         setSelectedType(invoice.invoiceType);
-        
-        // Set business ID if exists
+
         if (invoice.businessId) {
           setBusinessId(invoice.businessId);
         }
-        
-        // Set invoice data - use business info if available, otherwise use customer details
-        const business = invoice.business;
+
+        const business = invoice.business as BusinessInfo | null | undefined;
+        let fullBusiness: BusinessInfo | null = business ?? null;
+        if (invoice.businessId) {
+          try {
+            const br = await fetch(
+              `/api/business-info?id=${encodeURIComponent(invoice.businessId)}`
+            );
+            if (br.ok) {
+              fullBusiness = await br.json();
+            }
+          } catch {
+            /* keep invoice.business */
+          }
+        }
+        setSelectedBusiness(fullBusiness);
+
+        const b2bDifferent =
+          inv.invoiceType === "B2B" && Boolean(inv.differentGst);
+
         setInvoiceData({
-          customerName: business?.businessName || invoice.customerName || "",
-          customerPhone: business?.businessPhone || invoice.customerPhone || "",
-          customerEmail: business?.businessEmail || invoice.customerEmail || "",
-          customerAddress: business?.businessAddress || invoice.customerAddress || "",
-          customerAddress2: business?.businessAddress2 || invoice.customerAddress2 || "",
-          customerDistrict: business?.businessDistrict || invoice.customerDistrict || "",
-          customerState: business?.businessState || invoice.customerState || "",
-          customerPincode: business?.businessPincode || invoice.customerPincode || "",
-          customerGst: business?.gstNumber || invoice.customerGst || "",
-          invoiceDate: new Date(invoice.invoiceDate).toISOString().split('T')[0],
+          customerName: business?.businessName || inv.customerName || "",
+          customerPhone: business?.businessPhone || inv.customerPhone || "",
+          customerEmail: business?.businessEmail || inv.customerEmail || "",
+          customerAddress: b2bDifferent
+            ? inv.customerAddress || ""
+            : business?.businessAddress || inv.customerAddress || "",
+          customerAddress2: b2bDifferent
+            ? inv.customerAddress2 || ""
+            : business?.businessAddress2 || inv.customerAddress2 || "",
+          customerDistrict: b2bDifferent
+            ? inv.customerDistrict || ""
+            : business?.businessDistrict || inv.customerDistrict || "",
+          customerState: b2bDifferent
+            ? inv.customerState || ""
+            : business?.businessState || inv.customerState || "",
+          customerStateCode: b2bDifferent
+            ? inv.customerStateCode || ""
+            : business?.businessStateCode || inv.customerStateCode || "",
+          customerPincode: b2bDifferent
+            ? inv.customerPincode || ""
+            : business?.businessPincode || inv.customerPincode || "",
+          customerGst: b2bDifferent
+            ? inv.customerGst || ""
+            : business?.gstNumber || inv.customerGst || "",
+          invoiceDate: new Date(invoice.invoiceDate).toISOString().split("T")[0],
           currency: invoice.currency || "INR",
           exchangeRate: invoice.exchangeRate || 1,
           lutNumber: invoice.lutNumber || "",
@@ -208,15 +264,27 @@ export default function EditInvoicePage() {
           })));
         }
 
-        // If B2B, validate GST and set business info
         if (invoice.invoiceType === "B2B") {
-          if (business) {
-            setOriginalBusinessInfo(business);
+          if (fullBusiness) {
+            setOriginalBusinessInfo(fullBusiness);
             setGstValidated(true);
+            const multi =
+              fullBusiness.multipleGst &&
+              (fullBusiness.additionalGstLocations?.length ?? 0) > 0;
+            if (multi) {
+              if (inv.differentGst && inv.businessAdditionalGstId) {
+                setSelectedGstLocationKey(inv.businessAdditionalGstId);
+              } else {
+                setSelectedGstLocationKey("primary");
+              }
+            } else {
+              setSelectedGstLocationKey("primary");
+            }
             setBusinessInfoLoaded(true);
           } else if (invoice.customerGst) {
             setGstValidated(true);
             setBusinessInfoLoaded(true);
+            setSelectedGstLocationKey(null);
           }
         }
 
@@ -241,10 +309,135 @@ export default function EditInvoicePage() {
   }, [invoiceId, router]);
 
   const handleInputChange = (field: string, value: string | number) => {
-    setInvoiceData(prev => ({
+    setInvoiceData((prev) => ({
       ...prev,
-      [field]: value
+      [field]: value,
     }));
+  };
+
+  const setCustomerState = (stateName: string) => {
+    const code = indianStates.find((s) => s.name === stateName)?.code || "";
+    setInvoiceData((prev) => ({
+      ...prev,
+      customerState: stateName,
+      customerStateCode: code,
+    }));
+  };
+
+  const applyPrimaryBilling = (biz: BusinessInfo) => {
+    setInvoiceData((prev) => ({
+      ...prev,
+      customerGst: biz.gstNumber || "",
+      customerName: biz.businessName || "",
+      customerPhone: biz.businessPhone || "",
+      customerEmail: biz.businessEmail || "",
+      customerAddress: biz.businessAddress || "",
+      customerAddress2: biz.businessAddress2 || "",
+      customerDistrict: biz.businessDistrict || "",
+      customerState: biz.businessState || "",
+      customerStateCode: biz.businessStateCode || "",
+      customerPincode: biz.businessPincode || "",
+    }));
+  };
+
+  const applyAdditionalBilling = (biz: BusinessInfo, row: BusinessAdditionalGst) => {
+    setInvoiceData((prev) => ({
+      ...prev,
+      customerGst: row.gstNumber || "",
+      customerName: biz.businessName || "",
+      customerPhone: biz.businessPhone || "",
+      customerEmail: biz.businessEmail || "",
+      customerAddress: row.businessAddress || "",
+      customerAddress2: row.businessAddress2 || "",
+      customerDistrict: row.businessDistrict || "",
+      customerState: row.businessState || "",
+      customerStateCode: row.businessStateCode || "",
+      customerPincode: row.businessPincode || "",
+    }));
+  };
+
+  const onBillingGstLocationChange = (value: string) => {
+    if (!selectedBusiness) return;
+    if (value === "primary") {
+      applyPrimaryBilling(selectedBusiness);
+      setSelectedGstLocationKey("primary");
+    } else {
+      const row = selectedBusiness.additionalGstLocations?.find((r) => r.id === value);
+      if (row) applyAdditionalBilling(selectedBusiness, row);
+      setSelectedGstLocationKey(value);
+    }
+    setBusinessInfoLoaded(true);
+    setGstValidated(true);
+  };
+
+  const persistBusinessMasterFromForm = async () => {
+    if (!selectedBusiness || selectedType !== "B2B") return;
+    const additionalGstLocations = (selectedBusiness.additionalGstLocations ?? []).map((r) => {
+      if (selectedGstLocationKey !== "primary" && r.id === selectedGstLocationKey) {
+        return {
+          gstNumber: r.gstNumber,
+          businessAddress: invoiceData.customerAddress,
+          businessAddress2: invoiceData.customerAddress2,
+          businessDistrict: invoiceData.customerDistrict,
+          businessState: invoiceData.customerState,
+          businessStateCode:
+            invoiceData.customerStateCode ||
+            indianStates.find((s) => s.name === invoiceData.customerState)?.code ||
+            "",
+          businessPincode: invoiceData.customerPincode,
+        };
+      }
+      return {
+        gstNumber: r.gstNumber,
+        businessAddress: r.businessAddress ?? "",
+        businessAddress2: r.businessAddress2 ?? "",
+        businessDistrict: r.businessDistrict ?? "",
+        businessState: r.businessState ?? "",
+        businessStateCode: r.businessStateCode ?? "",
+        businessPincode: r.businessPincode ?? "",
+      };
+    });
+
+    const res = await fetch("/api/business-info", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: selectedBusiness.id,
+        gstNumber: selectedBusiness.gstNumber,
+        businessName: invoiceData.customerName,
+        businessPhone: invoiceData.customerPhone,
+        businessEmail: invoiceData.customerEmail,
+        ...(selectedGstLocationKey === "primary"
+          ? {
+              businessAddress: invoiceData.customerAddress,
+              businessAddress2: invoiceData.customerAddress2,
+              businessDistrict: invoiceData.customerDistrict,
+              businessState: invoiceData.customerState,
+              businessStateCode:
+                invoiceData.customerStateCode ||
+                indianStates.find((s) => s.name === invoiceData.customerState)?.code ||
+                "",
+              businessPincode: invoiceData.customerPincode,
+            }
+          : {
+              businessAddress: selectedBusiness.businessAddress ?? "",
+              businessAddress2: selectedBusiness.businessAddress2 ?? "",
+              businessDistrict: selectedBusiness.businessDistrict ?? "",
+              businessState: selectedBusiness.businessState ?? "",
+              businessStateCode: selectedBusiness.businessStateCode ?? "",
+              businessPincode: selectedBusiness.businessPincode ?? "",
+            }),
+        multipleGst: selectedBusiness.multipleGst ?? false,
+        additionalGstLocations,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "Failed to update business master record");
+    }
+    const updated = await res.json();
+    setSelectedBusiness(updated);
+    setOriginalBusinessInfo(updated);
   };
 
   // Handle GST number input and validation for B2B
@@ -264,36 +457,61 @@ export default function EditInvoicePage() {
       return;
     }
 
-    setGstValidated(true);
     setLoadingBusinessInfo(true);
 
     try {
-      // Search for business info
       const response = await fetch(`/api/business-info?gstNumber=${encodeURIComponent(gst)}`);
-      
+
       if (response.ok) {
-        const businessInfo = await response.json();
-        // Store business ID
+        const businessInfo = (await response.json()) as BusinessInfo;
         setBusinessId(businessInfo.id);
-        // Pre-fill business info
-        setInvoiceData(prev => ({
-          ...prev,
-          customerName: businessInfo.businessName || prev.customerName,
-          customerPhone: businessInfo.businessPhone || prev.customerPhone,
-          customerEmail: businessInfo.businessEmail || prev.customerEmail,
-          customerAddress: businessInfo.businessAddress || prev.customerAddress,
-          customerAddress2: businessInfo.businessAddress2 || prev.customerAddress2,
-          customerDistrict: businessInfo.businessDistrict || prev.customerDistrict,
-          customerState: businessInfo.businessState || prev.customerState,
-          customerPincode: businessInfo.businessPincode || prev.customerPincode,
-        }));
+        setSelectedBusiness(businessInfo);
         setOriginalBusinessInfo(businessInfo);
-        setBusinessInfoLoaded(true);
+        const multi =
+          businessInfo.multipleGst &&
+          (businessInfo.additionalGstLocations?.length ?? 0) > 0;
+        if (multi) {
+          setSelectedGstLocationKey(null);
+          setGstValidated(false);
+          setBusinessInfoLoaded(false);
+          setInvoiceData((prev) => ({
+            ...prev,
+            customerGst: "",
+            customerName: businessInfo.businessName || prev.customerName,
+            customerPhone: businessInfo.businessPhone || prev.customerPhone,
+            customerEmail: businessInfo.businessEmail || prev.customerEmail,
+            customerAddress: "",
+            customerAddress2: "",
+            customerDistrict: "",
+            customerState: "",
+            customerStateCode: "",
+            customerPincode: "",
+          }));
+        } else {
+          setSelectedGstLocationKey("primary");
+          setGstValidated(true);
+          setBusinessInfoLoaded(true);
+          setInvoiceData((prev) => ({
+            ...prev,
+            customerName: businessInfo.businessName || prev.customerName,
+            customerPhone: businessInfo.businessPhone || prev.customerPhone,
+            customerEmail: businessInfo.businessEmail || prev.customerEmail,
+            customerAddress: businessInfo.businessAddress || prev.customerAddress,
+            customerAddress2: businessInfo.businessAddress2 || prev.customerAddress2,
+            customerDistrict: businessInfo.businessDistrict || prev.customerDistrict,
+            customerState: businessInfo.businessState || prev.customerState,
+            customerStateCode: businessInfo.businessStateCode || prev.customerStateCode,
+            customerPincode: businessInfo.businessPincode || prev.customerPincode,
+            customerGst: businessInfo.gstNumber || prev.customerGst,
+          }));
+        }
       } else if (response.status === 404) {
-        // Business info not found - keep existing data
         setBusinessInfoLoaded(true);
         setOriginalBusinessInfo(null);
         setBusinessId(null);
+        setSelectedBusiness(null);
+        setSelectedGstLocationKey(null);
+        setGstValidated(true);
       } else {
         throw new Error("Failed to fetch business info");
       }
@@ -304,26 +522,6 @@ export default function EditInvoicePage() {
     } finally {
       setLoadingBusinessInfo(false);
     }
-  };
-
-  // Check if business info has changed
-  const hasBusinessInfoChanged = () => {
-    if (!originalBusinessInfo) {
-      // New business info - check if any field is filled
-      return invoiceData.customerName.trim() !== "" ||
-             invoiceData.customerPhone.trim() !== "" ||
-             invoiceData.customerEmail.trim() !== "";
-    }
-
-    // Compare with original
-    return originalBusinessInfo.businessName !== invoiceData.customerName ||
-           originalBusinessInfo.businessPhone !== invoiceData.customerPhone ||
-           originalBusinessInfo.businessEmail !== invoiceData.customerEmail ||
-           originalBusinessInfo.businessAddress !== invoiceData.customerAddress ||
-           originalBusinessInfo.businessAddress2 !== invoiceData.customerAddress2 ||
-           originalBusinessInfo.businessDistrict !== invoiceData.customerDistrict ||
-           originalBusinessInfo.businessState !== invoiceData.customerState ||
-           originalBusinessInfo.businessPincode !== invoiceData.customerPincode;
   };
 
   const handleItemChange = (itemId: string, field: string, value: string | number) => {
@@ -412,47 +610,28 @@ export default function EditInvoicePage() {
       }
       
       if (selectedType === "B2B") {
+        if (!businessId) {
+          alert("Business link is missing for this B2B invoice");
+          return;
+        }
         if (!invoiceData.customerGst) {
           alert("GST number is required for B2B invoices");
           return;
         }
         if (!gstValidated) {
-          alert("Please enter and validate GST number first");
+          alert("Please validate GST / select billing registration first");
           return;
         }
-        
-        // Save or update business info
-        if (hasBusinessInfoChanged()) {
-          const stateCode = indianStates.find(s => s.name === invoiceData.customerState)?.code || "";
-          
-          const businessInfoPayload = {
-            gstNumber: invoiceData.customerGst,
-            businessName: invoiceData.customerName,
-            businessPhone: invoiceData.customerPhone,
-            businessEmail: invoiceData.customerEmail,
-            businessAddress: invoiceData.customerAddress,
-            businessAddress2: invoiceData.customerAddress2,
-            businessDistrict: invoiceData.customerDistrict,
-            businessState: invoiceData.customerState,
-            businessStateCode: stateCode,
-            businessPincode: invoiceData.customerPincode,
-          };
+        const multi =
+          selectedBusiness?.multipleGst &&
+          (selectedBusiness.additionalGstLocations?.length ?? 0) > 0;
+        if (multi && selectedGstLocationKey === null) {
+          alert("Please select which GST registration to use for this invoice");
+          return;
+        }
 
-          const businessInfoResponse = await fetch('/api/business-info', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(businessInfoPayload),
-          });
-
-          if (!businessInfoResponse.ok) {
-            throw new Error('Failed to save business info');
-          }
-          
-          // Store the business ID from response
-          const savedBusinessInfo = await businessInfoResponse.json();
-          setBusinessId(savedBusinessInfo.id);
+        if (businessId && selectedBusiness) {
+          await persistBusinessMasterFromForm();
         }
       }
       
@@ -477,8 +656,11 @@ export default function EditInvoicePage() {
         customerAddress2?: string;
         customerDistrict?: string;
         customerState?: string;
+        customerStateCode?: string;
         customerPincode?: string;
         customerGst?: string;
+        differentGst?: boolean;
+        businessAdditionalGstId?: string | null;
         subtotal: number;
         totalTax: number;
         discount: number;
@@ -521,10 +703,30 @@ export default function EditInvoicePage() {
         }))
       };
       
-      // For B2B invoices, use businessId; for others, use customer details
       if (selectedType === "B2B" && businessId) {
         invoicePayload.businessId = businessId;
-        (invoicePayload as { serviceIds?: string[] }).serviceIds = includesServicesPeriod ? selectedServiceIds : [];
+        const useDifferent =
+          selectedGstLocationKey !== null &&
+          selectedGstLocationKey !== "primary" &&
+          (selectedBusiness?.additionalGstLocations?.length ?? 0) > 0;
+        invoicePayload.differentGst = useDifferent;
+        invoicePayload.businessAdditionalGstId = useDifferent ? selectedGstLocationKey : null;
+        invoicePayload.customerName = invoiceData.customerName;
+        invoicePayload.customerPhone = invoiceData.customerPhone;
+        invoicePayload.customerEmail = invoiceData.customerEmail;
+        invoicePayload.customerAddress = invoiceData.customerAddress;
+        invoicePayload.customerAddress2 = invoiceData.customerAddress2;
+        invoicePayload.customerDistrict = invoiceData.customerDistrict;
+        invoicePayload.customerState = invoiceData.customerState;
+        invoicePayload.customerStateCode =
+          invoiceData.customerStateCode ||
+          indianStates.find((s) => s.name === invoiceData.customerState)?.code ||
+          "";
+        invoicePayload.customerPincode = invoiceData.customerPincode;
+        invoicePayload.customerGst = invoiceData.customerGst;
+        (invoicePayload as { serviceIds?: string[] }).serviceIds = includesServicesPeriod
+          ? selectedServiceIds
+          : [];
       } else {
         invoicePayload.customerName = invoiceData.customerName;
         invoicePayload.customerPhone = invoiceData.customerPhone;
@@ -533,6 +735,10 @@ export default function EditInvoicePage() {
         invoicePayload.customerAddress2 = invoiceData.customerAddress2;
         invoicePayload.customerDistrict = invoiceData.customerDistrict;
         invoicePayload.customerState = invoiceData.customerState;
+        invoicePayload.customerStateCode =
+          invoiceData.customerStateCode ||
+          indianStates.find((s) => s.name === invoiceData.customerState)?.code ||
+          "";
         invoicePayload.customerPincode = invoiceData.customerPincode;
         invoicePayload.customerGst = invoiceData.customerGst;
       }
@@ -580,6 +786,23 @@ export default function EditInvoicePage() {
     );
   }
 
+  const b2bHasMultiGst =
+    selectedType === "B2B" &&
+    !!selectedBusiness &&
+    !!selectedBusiness.multipleGst &&
+    (selectedBusiness.additionalGstLocations?.length ?? 0) > 0;
+
+  const b2bNeedsGstPick = b2bHasMultiGst && selectedGstLocationKey === null;
+
+  const b2bShowFullCustomerForm =
+    selectedType !== "B2B" ||
+    (selectedType === "B2B" &&
+      ((!b2bHasMultiGst && businessInfoLoaded) ||
+        (b2bHasMultiGst && selectedGstLocationKey !== null) ||
+        (!businessId && businessInfoLoaded)));
+
+  const showInvoiceRest = selectedType !== "B2B" || b2bShowFullCustomerForm;
+
   return (
     <div className="max-w-6xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
@@ -617,7 +840,47 @@ export default function EditInvoicePage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {selectedType === "B2B" && (
+            {selectedType === "B2B" && businessId && selectedBusiness && (
+              <p className="text-sm text-muted-foreground">
+                Linked business: {selectedBusiness.businessName}
+              </p>
+            )}
+
+            {selectedType === "B2B" && businessId && selectedBusiness && b2bHasMultiGst && (
+              <div>
+                <Label>Billing GST registration *</Label>
+                <Select
+                  value={selectedGstLocationKey || ""}
+                  onValueChange={onBillingGstLocationChange}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select GSTIN for this invoice" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="primary">
+                      Primary ({selectedBusiness.gstNumber})
+                    </SelectItem>
+                    {selectedBusiness.additionalGstLocations?.map((r) => (
+                      <SelectItem key={r.id} value={r.id}>
+                        {r.gstNumber}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {b2bNeedsGstPick && (
+                  <p className="text-sm text-amber-700 mt-1">Select a GST registration to edit the rest of the invoice.</p>
+                )}
+              </div>
+            )}
+
+            {selectedType === "B2B" && businessId && selectedBusiness && !b2bHasMultiGst && (
+              <div>
+                <Label>GSTIN</Label>
+                <Input value={selectedBusiness.gstNumber} readOnly className="bg-muted" />
+              </div>
+            )}
+
+            {selectedType === "B2B" && !businessId && (
               <div>
                 <Label htmlFor="customerGst">GST Number *</Label>
                 <Input
@@ -645,7 +908,9 @@ export default function EditInvoicePage() {
               </div>
             )}
 
-            {(selectedType !== "B2B" || (selectedType === "B2B" && businessInfoLoaded)) && (
+            {(selectedType !== "B2B" ||
+              (selectedBusiness && (b2bNeedsGstPick || b2bShowFullCustomerForm)) ||
+              (!selectedBusiness && selectedType === "B2B" && businessInfoLoaded)) && (
               <>
                 <div>
                   <Label htmlFor="customerName">
@@ -686,7 +951,7 @@ export default function EditInvoicePage() {
               </>
             )}
 
-            {(selectedType !== "B2B" || (selectedType === "B2B" && businessInfoLoaded)) && (
+            {b2bShowFullCustomerForm && (
               <>
                 <div>
                   <Label htmlFor="customerAddress">Address Line 1 *</Label>
@@ -736,7 +1001,7 @@ export default function EditInvoicePage() {
                     <Label htmlFor="customerState">State *</Label>
                     <Select
                       value={invoiceData.customerState}
-                      onValueChange={(value: string) => handleInputChange("customerState", value)}
+                      onValueChange={(value: string) => setCustomerState(value)}
                     >
                       <SelectTrigger>
                         <SelectValue placeholder="Select state" />
@@ -749,6 +1014,15 @@ export default function EditInvoicePage() {
                         ))}
                       </SelectContent>
                     </Select>
+                  </div>
+                )}
+
+                {selectedType === "B2B" &&
+                  invoiceData.customerGst &&
+                  (b2bHasMultiGst || !businessId) && (
+                  <div>
+                    <Label>GSTIN (billing)</Label>
+                    <Input value={invoiceData.customerGst} readOnly className="bg-muted" />
                   </div>
                 )}
               </>
@@ -790,7 +1064,7 @@ export default function EditInvoicePage() {
           </CardContent>
         </Card>
 
-        {/* Invoice Details */}
+        {showInvoiceRest && (
         <Card>
           <CardHeader>
             <CardTitle>Invoice Details</CardTitle>
@@ -843,10 +1117,11 @@ export default function EditInvoicePage() {
             </div>
           </CardContent>
         </Card>
+        )}
       </div>
 
       {/* Services period - B2B only */}
-      {selectedType === "B2B" && businessId && (
+      {showInvoiceRest && selectedType === "B2B" && businessId && (
         <Card>
           <CardHeader>
             <CardTitle>Services period (optional)</CardTitle>
@@ -916,6 +1191,7 @@ export default function EditInvoicePage() {
       )}
 
       {/* Items Section */}
+      {showInvoiceRest && (
       <Card>
         <CardHeader>
           <div className="flex justify-between items-center">
@@ -1040,8 +1316,10 @@ export default function EditInvoicePage() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       {/* Totals Summary */}
+      {showInvoiceRest && (
       <Card>
         <CardHeader>
           <CardTitle>Invoice Summary</CardTitle>
@@ -1087,6 +1365,7 @@ export default function EditInvoicePage() {
           </div>
         </CardContent>
       </Card>
+      )}
     </div>
   );
 }

@@ -19,26 +19,86 @@ export async function GET(
 
     // For B2B invoices, fetch business data from BusinessInfo if businessId exists
     let business = invoice.business;
-    
+
     if (invoice.invoiceType === 'B2B' && invoice.businessId) {
-      // If business relation is not loaded, fetch it explicitly
       if (!business) {
         business = await adminPrisma.businessInfo.findUnique({
-          where: { id: invoice.businessId }
+          where: { id: invoice.businessId },
+          include: { additionalGstLocations: true },
         });
       }
     }
 
-    // Get customer/business details - use business info if available, otherwise use customer details
-    const customerName = business?.businessName || invoice.customerName || '';
-    const customerPhone = business?.businessPhone || invoice.customerPhone;
-    const customerEmail = business?.businessEmail || invoice.customerEmail;
-    const customerAddress = business?.businessAddress || invoice.customerAddress;
-    const customerAddress2 = business?.businessAddress2 || invoice.customerAddress2;
-    const customerDistrict = business?.businessDistrict || invoice.customerDistrict;
-    const customerState = business?.businessState || invoice.customerState;
-    const customerPincode = business?.businessPincode || invoice.customerPincode;
-    const customerGst = business?.gstNumber || invoice.customerGst;
+    const inv = invoice as typeof invoice & {
+      differentGst?: boolean;
+      customerAddress?: string | null;
+      customerGst?: string | null;
+    };
+
+    let customerName = '';
+    let customerPhone: string | undefined;
+    let customerEmail: string | undefined;
+    let customerAddress: string | undefined;
+    let customerAddress2: string | undefined;
+    let customerDistrict: string | undefined;
+    let customerState: string | undefined;
+    let customerPincode: string | undefined;
+    let customerGst: string | undefined;
+
+    if (invoice.invoiceType === 'B2B' && business) {
+      customerName = business.businessName || invoice.customerName || '';
+      customerPhone = business.businessPhone || invoice.customerPhone || undefined;
+      customerEmail = business.businessEmail || invoice.customerEmail || undefined;
+      if (inv.differentGst) {
+        customerAddress = inv.customerAddress || undefined;
+        customerAddress2 = inv.customerAddress2 || undefined;
+        customerDistrict = inv.customerDistrict || undefined;
+        customerState = inv.customerState || undefined;
+        customerPincode = inv.customerPincode || undefined;
+        customerGst = inv.customerGst || undefined;
+      } else {
+        customerAddress = business.businessAddress || inv.customerAddress || undefined;
+        customerAddress2 = business.businessAddress2 || inv.customerAddress2 || undefined;
+        customerDistrict = business.businessDistrict || inv.customerDistrict || undefined;
+        customerState = business.businessState || inv.customerState || undefined;
+        customerPincode = business.businessPincode || inv.customerPincode || undefined;
+        customerGst = business.gstNumber || inv.customerGst || undefined;
+      }
+    } else {
+      customerName = invoice.customerName || '';
+      customerPhone = invoice.customerPhone || undefined;
+      customerEmail = invoice.customerEmail || undefined;
+      customerAddress = invoice.customerAddress || undefined;
+      customerAddress2 = invoice.customerAddress2 || undefined;
+      customerDistrict = invoice.customerDistrict || undefined;
+      customerState = invoice.customerState || undefined;
+      customerPincode = invoice.customerPincode || undefined;
+      customerGst = invoice.customerGst || undefined;
+    }
+
+    const servicesList = (invoice as { services?: unknown[] }).services ?? [];
+    let servicesBillToGstNote: string | undefined;
+    if (
+      invoice.invoiceType === 'B2B' &&
+      inv.differentGst &&
+      servicesList.length > 0 &&
+      (inv.customerGst || inv.customerAddress)
+    ) {
+      const addrParts: string[] = [];
+      if (inv.customerAddress) addrParts.push(inv.customerAddress);
+      if (inv.customerAddress2) addrParts.push(inv.customerAddress2);
+      if (inv.customerDistrict) addrParts.push(inv.customerDistrict);
+      if (inv.customerState && inv.customerPincode) {
+        addrParts.push(`${inv.customerState} - ${inv.customerPincode}`);
+      } else if (inv.customerState) {
+        addrParts.push(inv.customerState);
+      } else if (inv.customerPincode) {
+        addrParts.push(inv.customerPincode);
+      }
+      const gstLine = inv.customerGst ? `GSTIN: ${inv.customerGst}` : '';
+      const addrLine = addrParts.length ? `Address: ${addrParts.join(', ')}` : '';
+      servicesBillToGstNote = [gstLine, addrLine].filter(Boolean).join('\n');
+    }
     
     // Transform invoice data to match PDF generator interface
     const pdfData = {
@@ -81,6 +141,7 @@ export async function GET(
         sgstAmount: item.sgstAmount || 0,
         totalAmount: item.totalAmount,
       })),
+      servicesBillToGstNote,
       services: ((invoice as { services?: Array<{
         serviceType: string;
         serviceCode?: string | null;

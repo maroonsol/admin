@@ -62,6 +62,8 @@ interface InvoiceData {
   items: InvoiceItem[];
   /** Services linked to this invoice (for B2B "invoice includes services period") */
   services?: InvoiceServiceRow[];
+  /** Shown above the services table when billing uses a different GSTIN (B2B multi-GST) */
+  servicesBillToGstNote?: string;
 }
 
 export interface TableCell {
@@ -798,6 +800,33 @@ export async function generateInvoicePDF(invoiceData: InvoiceData): Promise<Buff
         }
         return '-';
       };
+      if (invoiceData.servicesBillToGstNote) {
+        const gstCtxRow: TableRow[] = [
+          {
+            cells: [
+              {
+                text: invoiceData.servicesBillToGstNote,
+                align: 'left',
+                font,
+                fontSize: FONT_SIZE,
+              },
+            ],
+          },
+        ];
+        currentY = drawTable({
+          page,
+          startX: PAGE_MARGIN,
+          startY: currentY,
+          tableWidth,
+          columns: [tableWidth],
+          rows: gstCtxRow,
+          font,
+          boldFont,
+          fontSize: FONT_SIZE,
+        });
+        currentY -= SECTION_SPACING;
+      }
+
       const servicesTitleRow: TableRow[] = [
         {
           cells: [{ text: 'Services covered in this invoice', align: 'left', font: boldFont, fontSize: 9 }],

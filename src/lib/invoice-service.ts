@@ -11,8 +11,11 @@ export interface CreateInvoiceData {
   
   // Business ID (for B2B invoices)
   businessId?: string;
-  
-  // Customer details (for B2C and EXPORT invoices)
+  /** B2B: billing uses an additional GST registration */
+  differentGst?: boolean;
+  businessAdditionalGstId?: string | null;
+
+  // Customer details (B2C, EXPORT, and B2B billing snapshot)
   customerName?: string;
   customerPhone?: string;
   customerEmail?: string;
@@ -20,6 +23,7 @@ export interface CreateInvoiceData {
   customerAddress2?: string;
   customerDistrict?: string;
   customerState?: string;
+  customerStateCode?: string;
   customerPincode?: string;
   customerGst?: string;
   
@@ -158,8 +162,10 @@ export async function createInvoice(data: CreateInvoiceData) {
 
         // Business ID (for B2B invoices)
         businessId: data.businessId,
+        differentGst: data.differentGst ?? false,
+        businessAdditionalGstId: data.businessAdditionalGstId || null,
 
-        // Customer details (for B2C and EXPORT invoices)
+        // Customer / billing snapshot
         customerName: data.customerName,
         customerPhone: data.customerPhone,
         customerEmail: data.customerEmail,
@@ -167,6 +173,7 @@ export async function createInvoice(data: CreateInvoiceData) {
         customerAddress2: data.customerAddress2,
         customerDistrict: data.customerDistrict,
         customerState: data.customerState,
+        customerStateCode: data.customerStateCode,
         customerPincode: data.customerPincode,
         customerGst: data.customerGst,
 
@@ -198,7 +205,8 @@ export async function createInvoice(data: CreateInvoiceData) {
       },
       include: {
         items: true,
-        business: true
+        business: { include: { additionalGstLocations: true } },
+        businessAdditionalGst: true,
       }
     });
 
@@ -225,7 +233,8 @@ export async function getAllInvoices() {
     const invoices = await adminPrisma.invoice.findMany({
       include: {
         items: true,
-        business: true
+        business: { include: { additionalGstLocations: true } },
+        businessAdditionalGst: true,
       },
       orderBy: {
         createdAt: 'desc'
@@ -247,7 +256,8 @@ export async function getInvoiceById(id: string) {
       },
       include: {
         items: true,
-        business: true,
+        business: { include: { additionalGstLocations: true } },
+        businessAdditionalGst: true,
         services: true
       }
     });
@@ -277,6 +287,8 @@ export async function updateInvoice(id: string, data: Partial<CreateInvoiceData>
       exchangeRate?: number;
       lutNumber?: string;
       businessId?: string | null;
+      differentGst?: boolean;
+      businessAdditionalGstId?: string | null;
       customerName?: string;
       customerPhone?: string;
       customerEmail?: string;
@@ -284,6 +296,7 @@ export async function updateInvoice(id: string, data: Partial<CreateInvoiceData>
       customerAddress2?: string;
       customerDistrict?: string;
       customerState?: string;
+      customerStateCode?: string;
       customerPincode?: string;
       customerGst?: string;
       subtotal?: number;
@@ -305,8 +318,12 @@ export async function updateInvoice(id: string, data: Partial<CreateInvoiceData>
     
     // Business ID (for B2B invoices)
     if (data.businessId !== undefined) updateData.businessId = data.businessId;
-    
-    // Customer details (for B2C and EXPORT invoices)
+    if (data.differentGst !== undefined) updateData.differentGst = data.differentGst;
+    if (data.businessAdditionalGstId !== undefined) {
+      updateData.businessAdditionalGstId = data.businessAdditionalGstId;
+    }
+
+    // Customer / billing snapshot
     if (data.customerName !== undefined) updateData.customerName = data.customerName;
     if (data.customerPhone !== undefined) updateData.customerPhone = data.customerPhone;
     if (data.customerEmail !== undefined) updateData.customerEmail = data.customerEmail;
@@ -314,6 +331,7 @@ export async function updateInvoice(id: string, data: Partial<CreateInvoiceData>
     if (data.customerAddress2 !== undefined) updateData.customerAddress2 = data.customerAddress2;
     if (data.customerDistrict !== undefined) updateData.customerDistrict = data.customerDistrict;
     if (data.customerState !== undefined) updateData.customerState = data.customerState;
+    if (data.customerStateCode !== undefined) updateData.customerStateCode = data.customerStateCode;
     if (data.customerPincode !== undefined) updateData.customerPincode = data.customerPincode;
     if (data.customerGst !== undefined) updateData.customerGst = data.customerGst;
     
@@ -358,7 +376,7 @@ export async function updateInvoice(id: string, data: Partial<CreateInvoiceData>
     await adminPrisma.invoice.update({
       where: { id },
       data: updateData as Parameters<typeof adminPrisma.invoice.update>[0]['data'],
-      include: { items: true, business: true }
+      include: { items: true, business: { include: { additionalGstLocations: true } }, businessAdditionalGst: true }
     });
 
     // Create new items if provided
@@ -403,7 +421,7 @@ export async function updateInvoice(id: string, data: Partial<CreateInvoiceData>
     // Fetch updated invoice with items and services
     const updatedInvoice = await adminPrisma.invoice.findUnique({
       where: { id },
-      include: { items: true, business: true, services: true }
+      include: { items: true, business: { include: { additionalGstLocations: true } }, businessAdditionalGst: true, services: true }
     });
 
     return updatedInvoice;

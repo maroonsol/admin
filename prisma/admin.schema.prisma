@@ -22,6 +22,10 @@ model Invoice {
   // Business reference (for B2B invoices)
   businessId        String?
   business          BusinessInfo?     @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  /** When true, bill-to uses an additional GST registration (see businessAdditionalGstId) */
+  differentGst      Boolean           @default(false)
+  businessAdditionalGstId String?
+  businessAdditionalGst   BusinessAdditionalGst? @relation(fields: [businessAdditionalGstId], references: [id], onDelete: SetNull)
   
   // Customer details (for B2C and EXPORT invoices)
   customerName      String?
@@ -110,6 +114,10 @@ model BusinessInfo {
   businessStateCode String?
   businessPincode   String?
   
+  /** When true, business has extra GSTINs with separate addresses (see additionalGstLocations) */
+  multipleGst       Boolean  @default(false)
+  additionalGstLocations BusinessAdditionalGst[]
+  
   // Invoices
   invoices          Invoice[]
   
@@ -133,6 +141,28 @@ model BusinessInfo {
   updatedAt         DateTime @updatedAt
   
   @@map("business_info")
+}
+
+/** Extra GST registrations for a business (separate GSTIN + address from primary record) */
+model BusinessAdditionalGst {
+  id                String   @id @default(cuid())
+  businessId        String
+  business          BusinessInfo @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  gstNumber         String   @unique
+
+  businessAddress   String?
+  businessAddress2  String?
+  businessDistrict  String?
+  businessState     String?
+  businessStateCode String?
+  businessPincode   String?
+
+  invoices          Invoice[]
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("business_additional_gst")
 }
 
 enum ServiceType {
