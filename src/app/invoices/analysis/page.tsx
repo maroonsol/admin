@@ -23,6 +23,13 @@ interface HSNData {
   hsnSac: string;
   taxableAmount: number;
   gstRate: number;
+  /** Interstate supplies */
+  igstAmount: number;
+  /** Intrastate — Central component */
+  cgstAmount: number;
+  /** Intrastate — State component */
+  sgstAmount: number;
+  /** IGST + CGST + SGST */
   gstAmount: number;
   totalQuantity: number;
 }
@@ -32,6 +39,29 @@ interface AnalysisData {
   year: number;
   b2b: HSNData[];
   b2c: HSNData[];
+}
+
+function toNum(v: unknown): number {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeHsnRow(row: Partial<HSNData> & { hsnSac?: string }): HSNData {
+  const igstAmount = toNum(row.igstAmount);
+  const cgstAmount = toNum(row.cgstAmount);
+  const sgstAmount = toNum(row.sgstAmount);
+  const gstFromParts = igstAmount + cgstAmount + sgstAmount;
+  const gstAmount = toNum(row.gstAmount) || gstFromParts;
+  return {
+    hsnSac: String(row.hsnSac ?? ""),
+    taxableAmount: toNum(row.taxableAmount),
+    gstRate: toNum(row.gstRate),
+    igstAmount,
+    cgstAmount,
+    sgstAmount,
+    gstAmount,
+    totalQuantity: toNum(row.totalQuantity),
+  };
 }
 
 export default function AnalysisPage() {
@@ -72,7 +102,12 @@ export default function AnalysisPage() {
       const response = await fetch(`/api/invoices/analysis?month=${selectedMonth}&year=${selectedYear}`);
       if (response.ok) {
         const data = await response.json();
-        setAnalysisData(data);
+        setAnalysisData({
+          month: toNum(data.month),
+          year: toNum(data.year),
+          b2b: Array.isArray(data.b2b) ? data.b2b.map(normalizeHsnRow) : [],
+          b2c: Array.isArray(data.b2c) ? data.b2c.map(normalizeHsnRow) : [],
+        });
       } else {
         const errorData = await response.json();
         setError(errorData.error || "Failed to fetch analysis");
@@ -92,14 +127,17 @@ export default function AnalysisPage() {
       style: 'currency',
       currency: 'INR',
       minimumFractionDigits: 2,
-    }).format(amount);
+    }).format(toNum(amount));
   };
 
   const calculateTotals = (data: HSNData[]) => {
     return {
-      taxableAmount: data.reduce((sum, item) => sum + item.taxableAmount, 0),
-      gstAmount: data.reduce((sum, item) => sum + item.gstAmount, 0),
-      totalQuantity: data.reduce((sum, item) => sum + item.totalQuantity, 0),
+      taxableAmount: data.reduce((sum, item) => sum + toNum(item.taxableAmount), 0),
+      igstAmount: data.reduce((sum, item) => sum + toNum(item.igstAmount), 0),
+      cgstAmount: data.reduce((sum, item) => sum + toNum(item.cgstAmount), 0),
+      sgstAmount: data.reduce((sum, item) => sum + toNum(item.sgstAmount), 0),
+      gstAmount: data.reduce((sum, item) => sum + toNum(item.gstAmount), 0),
+      totalQuantity: data.reduce((sum, item) => sum + toNum(item.totalQuantity), 0),
     };
   };
 
@@ -107,7 +145,10 @@ export default function AnalysisPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Invoice Analysis</h1>
-        <p className="text-gray-600 mt-1">HSN/SAC code analysis by month</p>
+        <p className="text-gray-600 mt-1">
+          HSN/SAC code analysis by month. IGST applies to interstate sales; CGST and SGST apply to
+          intrastate sales (each is normally half of the headline GST rate).
+        </p>
       </div>
 
       {/* Month and Year Selector */}
@@ -168,7 +209,10 @@ export default function AnalysisPage() {
       </Card>
 
       {/* Analysis Results */}
-      {analysisData && (
+      {analysisData && (() => {
+        const b2bTotals = calculateTotals(analysisData.b2b);
+        const b2cTotals = calculateTotals(analysisData.b2c);
+        return (
         <div className="space-y-6">
           {/* B2B Analysis */}
           <Card>
@@ -189,7 +233,9 @@ export default function AnalysisPage() {
                           <TableHead>GST Rate (%)</TableHead>
                           <TableHead className="text-right">Total Quantity</TableHead>
                           <TableHead className="text-right">Taxable Amount</TableHead>
-                          <TableHead className="text-right">GST Amount</TableHead>
+                          <TableHead className="text-right">IGST</TableHead>
+                          <TableHead className="text-right">CGST</TableHead>
+                          <TableHead className="text-right">SGST</TableHead>
                           <TableHead className="text-right">Total Amount</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -200,7 +246,9 @@ export default function AnalysisPage() {
                             <TableCell>{item.gstRate}%</TableCell>
                             <TableCell className="text-right">{item.totalQuantity.toFixed(2)}</TableCell>
                             <TableCell className="text-right">{formatCurrency(item.taxableAmount)}</TableCell>
-                            <TableCell className="text-right">{formatCurrency(item.gstAmount)}</TableCell>
+                            <TableCell className="text-right">{formatCurrency(item.igstAmount)}</TableCell>
+                            <TableCell className="text-right">{formatCurrency(item.cgstAmount)}</TableCell>
+                            <TableCell className="text-right">{formatCurrency(item.sgstAmount)}</TableCell>
                             <TableCell className="text-right font-semibold">
                               {formatCurrency(item.taxableAmount + item.gstAmount)}
                             </TableCell>
@@ -213,20 +261,32 @@ export default function AnalysisPage() {
                     <div className="flex justify-end gap-6 text-sm">
                       <div>
                         <span className="text-gray-600">Total Quantity: </span>
-                        <span className="font-semibold">{calculateTotals(analysisData.b2b).totalQuantity.toFixed(2)}</span>
+                        <span className="font-semibold">{b2bTotals.totalQuantity.toFixed(2)}</span>
                       </div>
                       <div>
                         <span className="text-gray-600">Total Taxable: </span>
-                        <span className="font-semibold">{formatCurrency(calculateTotals(analysisData.b2b).taxableAmount)}</span>
+                        <span className="font-semibold">{formatCurrency(b2bTotals.taxableAmount)}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Total IGST: </span>
+                        <span className="font-semibold">{formatCurrency(b2bTotals.igstAmount)}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Total CGST: </span>
+                        <span className="font-semibold">{formatCurrency(b2bTotals.cgstAmount)}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Total SGST: </span>
+                        <span className="font-semibold">{formatCurrency(b2bTotals.sgstAmount)}</span>
                       </div>
                       <div>
                         <span className="text-gray-600">Total GST: </span>
-                        <span className="font-semibold">{formatCurrency(calculateTotals(analysisData.b2b).gstAmount)}</span>
+                        <span className="font-semibold">{formatCurrency(b2bTotals.gstAmount)}</span>
                       </div>
                       <div>
                         <span className="text-gray-600">Grand Total: </span>
                         <span className="font-semibold text-blue-700">
-                          {formatCurrency(calculateTotals(analysisData.b2b).taxableAmount + calculateTotals(analysisData.b2b).gstAmount)}
+                          {formatCurrency(b2bTotals.taxableAmount + b2bTotals.gstAmount)}
                         </span>
                       </div>
                     </div>
@@ -259,7 +319,9 @@ export default function AnalysisPage() {
                           <TableHead>GST Rate (%)</TableHead>
                           <TableHead className="text-right">Total Quantity</TableHead>
                           <TableHead className="text-right">Taxable Amount</TableHead>
-                          <TableHead className="text-right">GST Amount</TableHead>
+                          <TableHead className="text-right">IGST</TableHead>
+                          <TableHead className="text-right">CGST</TableHead>
+                          <TableHead className="text-right">SGST</TableHead>
                           <TableHead className="text-right">Total Amount</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -270,7 +332,9 @@ export default function AnalysisPage() {
                             <TableCell>{item.gstRate}%</TableCell>
                             <TableCell className="text-right">{item.totalQuantity.toFixed(2)}</TableCell>
                             <TableCell className="text-right">{formatCurrency(item.taxableAmount)}</TableCell>
-                            <TableCell className="text-right">{formatCurrency(item.gstAmount)}</TableCell>
+                            <TableCell className="text-right">{formatCurrency(item.igstAmount)}</TableCell>
+                            <TableCell className="text-right">{formatCurrency(item.cgstAmount)}</TableCell>
+                            <TableCell className="text-right">{formatCurrency(item.sgstAmount)}</TableCell>
                             <TableCell className="text-right font-semibold">
                               {formatCurrency(item.taxableAmount + item.gstAmount)}
                             </TableCell>
@@ -283,20 +347,32 @@ export default function AnalysisPage() {
                     <div className="flex justify-end gap-6 text-sm">
                       <div>
                         <span className="text-gray-600">Total Quantity: </span>
-                        <span className="font-semibold">{calculateTotals(analysisData.b2c).totalQuantity.toFixed(2)}</span>
+                        <span className="font-semibold">{b2cTotals.totalQuantity.toFixed(2)}</span>
                       </div>
                       <div>
                         <span className="text-gray-600">Total Taxable: </span>
-                        <span className="font-semibold">{formatCurrency(calculateTotals(analysisData.b2c).taxableAmount)}</span>
+                        <span className="font-semibold">{formatCurrency(b2cTotals.taxableAmount)}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Total IGST: </span>
+                        <span className="font-semibold">{formatCurrency(b2cTotals.igstAmount)}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Total CGST: </span>
+                        <span className="font-semibold">{formatCurrency(b2cTotals.cgstAmount)}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Total SGST: </span>
+                        <span className="font-semibold">{formatCurrency(b2cTotals.sgstAmount)}</span>
                       </div>
                       <div>
                         <span className="text-gray-600">Total GST: </span>
-                        <span className="font-semibold">{formatCurrency(calculateTotals(analysisData.b2c).gstAmount)}</span>
+                        <span className="font-semibold">{formatCurrency(b2cTotals.gstAmount)}</span>
                       </div>
                       <div>
                         <span className="text-gray-600">Grand Total: </span>
                         <span className="font-semibold text-green-700">
-                          {formatCurrency(calculateTotals(analysisData.b2c).taxableAmount + calculateTotals(analysisData.b2c).gstAmount)}
+                          {formatCurrency(b2cTotals.taxableAmount + b2cTotals.gstAmount)}
                         </span>
                       </div>
                     </div>
@@ -310,7 +386,8 @@ export default function AnalysisPage() {
             </CardContent>
           </Card>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
